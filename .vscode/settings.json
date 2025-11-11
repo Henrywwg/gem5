@@ -3,5 +3,6 @@
         "src/python",
         "ext",
         "tests"
-    ]
+    ],
+    "C_Cpp.errorSquiggles": "disabled"
 }

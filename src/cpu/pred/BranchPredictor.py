@@ -227,6 +227,12 @@ class BranchPredictor(SimObject):
         "in modern server CPUs: https://ieeexplore.ieee.org/document/9246215",
     )
 
+class DualPathSwitchingBP(BranchPredictor):
+    type = 'DualPathSwitchingBP'
+    cxx_class = 'gem5::DualPathSwitchingBP'
+    cxx_header = "cpu/pred/dual_path_switching_bp.hh"
+    window_size = Param.Unsigned(100, "Number of branches to track for confidence")
+    threshold = Param.Percent(80, "Minimum accuracy to disable dual-path mode")
 
 class LocalBP(BranchPredictor):
     type = "LocalBP"
