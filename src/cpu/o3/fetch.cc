@@ -139,7 +139,10 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         // which may not hold the entire cache line.
         fetchBuffer[tid] = new uint8_t[fetchBufferSize];
     }
-
+    // --- APB initialization ---
+    if (_cpu->apb) {
+        apb = _cpu->apb;
+    }
     // Get the size of an instruction.
     instSize = decoder[0]->moreBytesSize();
 }
@@ -1108,11 +1111,24 @@ Fetch::fetch(bool &status_change)
     } else if (fetchStatus[tid] == Running) {
         // Align the fetch PC so its at the start of a fetch buffer segment.
         Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
-
+        // --- Check APB first ---
+        if (apb && apb->contains(fetchAddr)) {
+            const uint8_t* line = apb->readLine(fetchAddr);
+            if (line) {  // <-- add this check
+                std::memcpy(fetchBuffer[tid], line, fetchBufferSize);
+                fetchBufferPC[tid] = fetchBufferAlignPC(fetchAddr);
+                fetchBufferValid[tid] = true;
+                fetchStatus[tid] = Running;
+                status_change = true;
+            } else {
+                // APB miss: fall back to L1I
+                DPRINTF(Fetch, "[tid:%i] APB miss for PC %s, falling back to I-cache\n", tid, this_pc);
+            }
+        }
         // If buffer is no longer valid or fetchAddr has moved to point
         // to the next cache block, AND we have no remaining ucode
         // from a macro-op, then start fetch from icache.
-        if (!(fetchBufferValid[tid] &&
+        else if (!(fetchBufferValid[tid] &&
                     fetchBufferBlockPC == fetchBufferPC[tid]) && !inRom &&
                 !macroop[tid]) {
             DPRINTF(Fetch, "[tid:%i] Attempting to translate and read "
@@ -1216,6 +1232,33 @@ Fetch::fetch(bool &status_change)
             if (!(curMacroop || inRom)) {
                 if (dec_ptr->instReady()) {
                     staticInst = dec_ptr->decode(this_pc);
+
+                    if (staticInst->isBranch()) {
+                        Addr predictedPC = next_pc->instAddr();      // normal predicted path
+                        Addr fallThroughPC = staticInst->fallThroughPC();
+                        Addr targetPC = staticInst->branchTargetPC();
+
+                        // Determine alternate path
+                        Addr altPC = (predictedPC == targetPC) ? fallThroughPC : targetPC;
+
+                        // Align it for the fetch buffer
+                        Addr altLinePC = fetchBufferAlignPC(altPC);
+
+                        // Only populate if APB doesn't already have it
+                        if (apb && !apb->contains(altLinePC)) {
+                            uint8_t altData[fetchBufferSize];
+
+                            // Speculatively read from L1I (non-blocking if possible)
+                            // Use your normal fetchCacheLine logic, but just to fill altData
+                            bool ok = fetchCacheLineNonBlocking(altLinePC, altData, fetchBufferSize);
+
+                            if (ok) {
+                                apb->insertLine(altLinePC, altData, fetchBufferSize);
+                                DPRINTF(Fetch, "Inserted alternate path into APB at PC %s\n", altLinePC);
+                            }
+                        }
+                    }
+
 
                     // Increment stat of fetched instructions.
                     cpu->fetchStats[tid]->numInsts++;

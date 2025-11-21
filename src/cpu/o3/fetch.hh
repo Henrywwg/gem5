@@ -48,6 +48,7 @@
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/limits.hh"
+#include "cpu/o3/apb.hh"
 #include "cpu/pc_event.hh"
 #include "cpu/pred/bpred_unit.hh"
 #include "cpu/timebuf.hh"
@@ -392,6 +393,9 @@ class Fetch
   private:
     /** Pointer to the O3CPU. */
     CPU *cpu;
+
+    /** Pointer to the APB. */
+    APB *apb = nullptr;
 
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;

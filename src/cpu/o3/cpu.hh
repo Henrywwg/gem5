@@ -115,6 +115,7 @@ class CPU : public BaseCPU
 
     /** Overall CPU status. */
     Status _status;
+    APB *apb = nullptr;
 
   private:
 
