@@ -1068,6 +1068,113 @@ Fetch::buildInst(ThreadID tid, StaticInstPtr staticInst,
 
     return instruction;
 }
+bool
+Fetch::fetchCacheLineNonBlocking(Addr linePC, uint8_t *dst, int size, ThreadID tid)
+{
+    // Align the requested address the same way the fetch buffer does.
+    Addr alignedPC = fetchBufferAlignPC(linePC);
+
+    // FAST PATH: if some thread's fetch buffer already contains this aligned line,
+    // copy it immediately. We check this thread's buffer first (tid passed in).
+    if (tid != InvalidThreadID) {
+        if (fetchBufferValid[tid] && fetchBufferPC[tid] == alignedPC) {
+            // fetchBuffer[tid] contains the aligned block
+            std::memcpy(dst, fetchBuffer[tid], size);
+            if (debugAltFetch) {
+                DPRINTF(Fetch, "AltFetch fast-path hit for %#x (tid=%d)\n", alignedPC, tid);
+            }
+            return true;
+        }
+    }
+
+    // If a speculative request for this aligned line is already in flight, return false.
+    if (outstandingAltFetches.find(alignedPC) != outstandingAltFetches.end()) {
+        if (debugAltFetch) {
+            DPRINTF(Fetch, "AltFetch already outstanding for %#x\n", alignedPC);
+        }
+        return false;
+    }
+
+    // Build a Request for instruction fetch of the full line.
+    RequestPtr req = std::make_shared<Request>(
+        alignedPC,                          // physical/virtual? Use existing code path
+        size,
+        Request::INST_FETCH,
+        cpu->instMasterId());
+
+    // Build packet and allocate a dynamic buffer to hold the returned data.
+    PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
+    pkt->dataDynamic(new uint8_t[size]);
+
+    // Try to send the timing request to the I-cache port. If the icache port refuses,
+    // free the packet and return false (try again later).
+    bool sent = icachePort.sendTimingReq(pkt);
+    if (!sent) {
+        // Port not ready. Free buffers and packet.
+        delete[] pkt->getPtr<uint8_t>();
+        delete pkt;
+        if (debugAltFetch) {
+            DPRINTF(Fetch, "AltFetch sendTimingReq rejected for %#x\n", alignedPC);
+        }
+        return false;
+    }
+
+    // Record that this alignedPC is outstanding. We do NOT store the PacketPtr here;
+    // we rely on the response path to give us the packet back and match by address.
+    outstandingAltFetches.insert(alignedPC);
+
+    if (debugAltFetch) {
+        DPRINTF(Fetch, "AltFetch request sent for %#x\n", alignedPC);
+    }
+
+    return false; // request issued, data will arrive asynchronously
+}
+
+void
+Fetch::handleIcacheTimingResp(PacketPtr pkt)
+{
+    // Extract the address from the packet.
+    // Use the same function used elsewhere in your fetch stage.
+    Addr addr = pkt->req->getVaddr();   // or getPaddr(), whichever your CPU uses
+    Addr alignedPC = fetchBufferAlignPC(addr);
+
+    // -------------------------------
+    // Case 1: This is an alternate-path (APB) speculative fetch response.
+    // -------------------------------
+    auto it = outstandingAltFetches.find(alignedPC);
+    if (it != outstandingAltFetches.end()) {
+
+        const uint8_t *data = pkt->getConstPtr<uint8_t>();
+
+        if (apb) {
+            apb->insertLine(alignedPC, data, fetchBufferSize);
+            DPRINTF(Fetch, "APB inserted line for %#x from timing response\n", alignedPC);
+        }
+
+        // Remove marker
+        outstandingAltFetches.erase(it);
+
+        // Free packet buffers (we allocated them)
+        delete[] pkt->getPtr<uint8_t>();
+        delete pkt;
+
+        return;  // DONE — do NOT forward to processCacheCompletion
+    }
+
+    // -------------------------------
+    // Case 2: This response belongs to the normal instruction fetch path.
+    // Forward exactly as original gem5 intended.
+    // -------------------------------
+    DPRINTF(O3CPU, "Fetch unit received timing\n");
+
+    // This is the original assert
+    assert(pkt->req->isUncacheable() ||
+           !(pkt->cacheResponding() && !pkt->hasSharers()));
+
+    // The original code path — REQUIRED
+    processCacheCompletion(pkt);
+}
+
 
 void
 Fetch::fetch(bool &status_change)
@@ -1250,7 +1357,7 @@ Fetch::fetch(bool &status_change)
 
                             // Speculatively read from L1I (non-blocking if possible)
                             // Use your normal fetchCacheLine logic, but just to fill altData
-                            bool ok = fetchCacheLineNonBlocking(altLinePC, altData, fetchBufferSize);
+                            bool ok = fetchCacheLineNonBlocking(altLinePC, altData, fetchBufferSize, tid);
 
                             if (ok) {
                                 apb->insertLine(altLinePC, altData, fetchBufferSize);
@@ -1616,10 +1723,15 @@ bool
 Fetch::IcachePort::recvTimingResp(PacketPtr pkt)
 {
     DPRINTF(O3CPU, "Fetch unit received timing\n");
-    // We shouldn't ever get a cacheable block in Modified state
+
+    // Same asserts as before
     assert(pkt->req->isUncacheable() ||
            !(pkt->cacheResponding() && !pkt->hasSharers()));
-    fetch->processCacheCompletion(pkt);
+
+    // Call your unified handler that processes:
+    //  - normal fetch returns
+    //  - alternate-path speculative prefetch returns
+    fetch->handleIcacheTimingResp(pkt);
 
     return true;
 }

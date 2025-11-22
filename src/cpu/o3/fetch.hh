@@ -328,6 +328,13 @@ class Fetch
     FetchStatus updateFetchStatus();
 
   public:
+
+    // Non-blocking alternate-path fetch helper (declared in header)
+    bool fetchCacheLineNonBlocking(Addr linePC, uint8_t *dst, int size, ThreadID tid);
+
+    // Handle a timing response from the I-cache port (we'll call this from IcachePort::recvTimingResp)
+    void handleIcacheTimingResp(PacketPtr pkt);
+
     /** Squashes a specific thread and resets the PC. Also tells the CPU to
      * remove any instructions that are not in the ROB. The source of this
      * squash should be the commit stage.
@@ -396,6 +403,12 @@ class Fetch
 
     /** Pointer to the APB. */
     APB *apb = nullptr;
+
+    // Track outstanding speculative alternate-path requests (aligned line addresses)
+    std::unordered_set<Addr> outstandingAltFetches;
+
+    // (optional) debug control
+    bool debugAltFetch = true;
 
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;
