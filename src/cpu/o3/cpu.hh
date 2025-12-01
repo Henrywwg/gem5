@@ -61,6 +61,7 @@
 #include "cpu/o3/limits.hh"
 #include "cpu/o3/rename.hh"
 #include "cpu/o3/apb.hh"
+#include "cpu/o3/dual_path_switcher.hh"
 #include "cpu/o3/rob.hh"
 #include "cpu/o3/scoreboard.hh"
 #include "cpu/o3/thread_state.hh"
@@ -117,6 +118,7 @@ class CPU : public BaseCPU
     /** Overall CPU status. */
     Status _status;
     APB *apb = nullptr;
+    DualPathSwitcher *dualPathSwitcher = nullptr;
 
   private:
 

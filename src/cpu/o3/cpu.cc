@@ -86,19 +86,6 @@ CPU::CPU(const BaseO3CPUParams &params)
       iew(this, params),
       commit(this, params),
 
-      // --- APB allocation (immediately in constructor body) ---
-      if (!apb) {
-        APBParams apbParams("cpu_apb");
-        apbParams.num_entries = 64;
-        apbParams.line_size   = 64;
-        apb = new APB(apbParams);
-      }
-
-      // --- Hook Fetch to APB ---
-      if (fetch.apb == nullptr) {
-        fetch.apb = apb;
-      }
-
       regFile(params.numPhysIntRegs,
               params.numPhysFloatRegs,
               params.numPhysVecRegs,
@@ -140,6 +127,21 @@ CPU::CPU(const BaseO3CPUParams &params)
         _status = Running;
     } else {
         _status = SwitchedOut;
+    }
+
+    // Initialize APB if provided
+    if (params.apb) {
+        apb = params.apb;
+        fetch.setAPB(apb);
+        DPRINTF(O3CPU, "APB initialized with %d entries\n",
+                apb->getNumEntries());
+    }
+
+    // Initialize DualPathSwitcher if provided
+    if (params.dualPathSwitcher) {
+        dualPathSwitcher = params.dualPathSwitcher;
+        DPRINTF(O3CPU, "DualPathSwitcher initialized (initial mode: %s)\n",
+                dualPathSwitcher->useDualPath() ? "dual-path" : "single-path");
     }
 
     if (params.checker) {

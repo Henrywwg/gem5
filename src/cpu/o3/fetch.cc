@@ -129,6 +129,8 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         fetchBufferValid[i] = false;
         lastIcacheStall[i] = 0;
         issuePipelinedIfetch[i] = false;
+        squashStartTick[i] = 0;
+        squashIsBranchMisp[i] = false;
     }
 
     branchPred = params.branchPred;
@@ -196,7 +198,33 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
              "Number of instructions fetched each cycle (Total)"),
     ADD_STAT(idleRate, statistics::units::Ratio::get(),
              "Ratio of cycles fetch was idle",
-             idleCycles / cpu->baseStats.numCycles)
+             idleCycles / cpu->baseStats.numCycles),
+    ADD_STAT(altPathFetchRequests, statistics::units::Count::get(),
+             "Number of alternate path fetch requests initiated"),
+    ADD_STAT(altPathFetchCompleted, statistics::units::Count::get(),
+             "Number of alternate path fetches completed"),
+    ADD_STAT(altPathFetchSquashed, statistics::units::Count::get(),
+             "Number of alternate path fetches squashed"),
+    ADD_STAT(altPathCacheLines, statistics::units::Count::get(),
+             "Number of cache lines fetched for alternate paths"),
+    ADD_STAT(altPathFetchDeferred, statistics::units::Count::get(),
+             "Number of alternate path fetches deferred due to cache blocked"),
+    ADD_STAT(altPathFetchDeferredProcessed, statistics::units::Count::get(),
+             "Number of deferred alternate path fetches processed"),
+    ADD_STAT(altPathFetchDeferredDropped, statistics::units::Count::get(),
+             "Number of deferred alternate path fetches dropped (queue full)"),
+    ADD_STAT(branchMispredRecoveryCycles, statistics::units::Cycle::get(),
+             "Total cycles spent recovering from branch mispredictions"),
+    ADD_STAT(apbRecoveryHits, statistics::units::Count::get(),
+             "Number of branch mispredictions where APB had correct path"),
+    ADD_STAT(apbRecoveryMisses, statistics::units::Count::get(),
+             "Number of branch mispredictions where APB missed"),
+    ADD_STAT(recoveryLatency, statistics::units::Cycle::get(),
+             "Distribution of branch misprediction recovery latency"),
+    ADD_STAT(apbHitRecoveryLatency, statistics::units::Cycle::get(),
+             "Recovery latency when APB has correct path"),
+    ADD_STAT(apbMissRecoveryLatency, statistics::units::Cycle::get(),
+             "Recovery latency when APB misses")
 {
         predictedBranches
             .prereq(predictedBranches);
@@ -235,6 +263,15 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
             .flags(statistics::pdf);
         idleRate
             .prereq(idleRate);
+        recoveryLatency
+            .init(/* base */ 0, /* max */ 1000, /* bucket size */ 10)
+            .flags(statistics::pdf);
+        apbHitRecoveryLatency
+            .init(/* base */ 0, /* max */ 1000, /* bucket size */ 10)
+            .flags(statistics::pdf);
+        apbMissRecoveryLatency
+            .init(/* base */ 0, /* max */ 1000, /* bucket size */ 10)
+            .flags(statistics::pdf);
 }
 void
 Fetch::setTimeBuffer(TimeBuffer<TimeStruct> *time_buffer)
@@ -340,6 +377,32 @@ Fetch::processCacheCompletion(PacketPtr pkt)
     DPRINTF(Fetch, "[tid:%i] Waking up from cache miss.\n", tid);
     assert(!cpu->switchedOut());
 
+    // Check if this is an alternate path fetch response
+    Addr addr = pkt->req->getVaddr();
+    Addr alignedPC = fetchBufferAlignPC(addr);
+    auto it = outstandingAltFetches.find(alignedPC);
+
+    if (it != outstandingAltFetches.end()) {
+        // This is an alternate path fetch - insert into APB
+        const uint8_t *data = pkt->getConstPtr<uint8_t>();
+        if (apb) {
+            apb->insertLine(alignedPC, data, fetchBufferSize);
+            DPRINTF(Fetch, "[APB] Inserted alternate path line %#x into APB\n", alignedPC);
+        }
+
+        // Track alternate path fetch completion
+        ++fetchStats.altPathFetchCompleted;
+        ++fetchStats.altPathCacheLines;
+
+        // Remove from tracking structures
+        outstandingAltFetches.erase(it);
+        altPathTranslations.erase(alignedPC);
+
+        // Clean up and return - this is not a normal fetch
+        delete pkt;
+        return;
+    }
+
     // Only change the status if it's still waiting on the icache access
     // to return.
     if (fetchStatus[tid] != IcacheWaitResponse ||
@@ -360,6 +423,19 @@ Fetch::processCacheCompletion(PacketPtr pkt)
             tid);
 
     switchToActive();
+
+    // Track recovery completion for branch mispredictions
+    if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {
+        Tick recoveryTime = curTick() - squashStartTick[tid];
+        ++fetchStats.apbRecoveryMisses;
+        fetchStats.apbMissRecoveryLatency.sample(recoveryTime);
+        fetchStats.recoveryLatency.sample(recoveryTime);
+        fetchStats.branchMispredRecoveryCycles += recoveryTime;
+        DPRINTF(Fetch, "[tid:%i] APB miss for recovery. Latency: %d cycles\n",
+                tid, recoveryTime);
+        squashStartTick[tid] = 0;
+        squashIsBranchMisp[tid] = false;
+    }
 
     // Only switch to IcacheAccessComplete if we're not stalled as well.
     if (checkStall(tid)) {
@@ -526,10 +602,51 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
     inst->setPredTarg(next_pc);
     inst->setPredTaken(predict_taken);
 
+    // Get and store branch prediction confidence
+    double confidence = branchPred->getLastPredictionConfidence(tid);
+    inst->setBranchPredConfidence(confidence);
+
     cpu->fetchStats[tid]->numBranches++;
 
     if (predict_taken) {
         ++fetchStats.predictedBranches;
+    }
+
+    // Dual-path execution: fetch alternate path into APB with proper virtual address translation
+    if (apb && cpu->dualPathSwitcher) {
+        // Use actual branch predictor confidence
+        double confidence = inst->getBranchPredConfidence();
+
+        // Check if we should fetch alternate path based on policy
+        if (cpu->dualPathSwitcher->shouldFetchAlternatePath(confidence)) {
+            // Calculate alternate path: opposite of predicted path
+            std::unique_ptr<PCStateBase> alternate_pc(next_pc.clone());
+            Addr alt_vaddr;
+
+            try {
+                if (predict_taken) {
+                    // Predicted taken, so alternate is fall-through (not taken)
+                    inst->staticInst->advancePC(*alternate_pc);
+                    alt_vaddr = alternate_pc->instAddr();
+                    DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dual-path mode: "
+                            "fetching NOT-TAKEN path %#x into APB (confidence=%.2f)\n",
+                            tid, inst->seqNum, alt_vaddr, confidence);
+                } else {
+                    // Predicted not-taken, so alternate is branch target (taken)
+                    inst->staticInst->branchTarget(*alternate_pc);
+                    alt_vaddr = alternate_pc->instAddr();
+                    DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dual-path mode: "
+                            "fetching TAKEN path %#x into APB (confidence=%.2f)\n",
+                            tid, inst->seqNum, alt_vaddr, confidence);
+                }
+
+                // Fetch alternate path with proper virtual address translation
+                fetchAlternatePath(alt_vaddr, tid, inst->pcState().instAddr());
+            } catch (...) {
+                // Ignore errors in alternate path calculation
+                // This can happen for unconditional branches or other corner cases
+            }
+        }
     }
 
     return predict_taken;
@@ -582,6 +699,157 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
     cpu->mmu->translateTiming(mem_req, cpu->thread[tid]->getTC(),
                               trans, BaseMMU::Execute);
     return true;
+}
+
+void
+Fetch::fetchAlternatePath(Addr altVaddr, ThreadID tid, Addr branchPC)
+{
+    // Don't fetch if we're switched out
+    if (cpu->switchedOut()) {
+        return;
+    }
+
+    // If cache is blocked, defer this fetch for later
+    if (cacheBlocked) {
+        if (deferredAltFetches.size() < MAX_DEFERRED_ALT_FETCHES) {
+            deferredAltFetches.push_back({altVaddr, tid, branchPC});
+            ++fetchStats.altPathFetchDeferred;
+            DPRINTF(Fetch, "[tid:%i] Deferring alternate path fetch for %#x "
+                    "(cache blocked, queue size: %d)\n",
+                    tid, altVaddr, deferredAltFetches.size());
+        } else {
+            ++fetchStats.altPathFetchDeferredDropped;
+            DPRINTF(Fetch, "[tid:%i] Dropping alternate path fetch for %#x "
+                    "(deferred queue full)\n", tid, altVaddr);
+        }
+        return;
+    }
+
+    // Align the fetch address to the start of a fetch buffer segment
+    Addr fetchBufferBlockPC = fetchBufferAlignPC(altVaddr);
+
+    // Check if we already have an outstanding request for this address
+    if (outstandingAltFetches.find(fetchBufferBlockPC) != outstandingAltFetches.end()) {
+        DPRINTF(Fetch, "[tid:%i] Alternate path fetch for %#x already outstanding\n",
+                tid, fetchBufferBlockPC);
+        return;
+    }
+
+    // Check if this address is already in APB
+    if (apb && apb->contains(fetchBufferBlockPC)) {
+        DPRINTF(Fetch, "[tid:%i] Alternate path %#x already in APB\n",
+                tid, fetchBufferBlockPC);
+        return;
+    }
+
+    DPRINTF(Fetch, "[tid:%i] Starting alternate path fetch for vaddr %#x (aligned: %#x)\n",
+            tid, altVaddr, fetchBufferBlockPC);
+
+    // Create a memory request for the alternate path
+    // Mark as PREFETCH so it doesn't interfere with normal MSHR state
+    RequestPtr mem_req = std::make_shared<Request>(
+        fetchBufferBlockPC, fetchBufferSize,
+        Request::INST_FETCH | Request::PREFETCH, cpu->instRequestorId(), branchPC,
+        cpu->thread[tid]->contextId());
+
+    mem_req->taskId(cpu->taskId());
+
+    // Mark this as outstanding and track the translation
+    outstandingAltFetches.insert(fetchBufferBlockPC);
+    altPathTranslations[fetchBufferBlockPC] = std::make_pair(branchPC, tid);
+
+    // Initiate translation of the alternate path address
+    FetchTranslationAlt *trans = new FetchTranslationAlt(this, fetchBufferBlockPC, tid);
+    cpu->mmu->translateTiming(mem_req, cpu->thread[tid]->getTC(),
+                              trans, BaseMMU::Execute);
+
+    // Track alternate path fetch request
+    ++fetchStats.altPathFetchRequests;
+}
+
+void
+Fetch::finishTranslationAlt(const Fault &fault, const RequestPtr &mem_req,
+                             Addr altPC, ThreadID tid)
+{
+    assert(!cpu->switchedOut());
+
+    // Check if this translation was squashed
+    auto it = outstandingAltFetches.find(altPC);
+    if (it == outstandingAltFetches.end()) {
+        DPRINTF(Fetch, "[tid:%i] Ignoring alternate path translation after squash\n", tid);
+        ++fetchStats.altPathFetchSquashed;
+        return;
+    }
+
+    // If translation was successful, fetch from I-cache
+    if (fault == NoFault) {
+        // Check that we're not going off into random memory
+        if (!cpu->system->isMemAddr(mem_req->getPaddr())) {
+            warn("Alternate path address %#x is outside of physical memory\n",
+                 mem_req->getPaddr());
+            outstandingAltFetches.erase(it);
+            altPathTranslations.erase(altPC);
+            return;
+        }
+
+        // Build packet for alternate path fetch
+        PacketPtr data_pkt = new Packet(mem_req, MemCmd::ReadReq);
+        data_pkt->dataDynamic(new uint8_t[fetchBufferSize]);
+
+        DPRINTF(Fetch, "[tid:%i] Alternate path translation complete, "
+                "fetching from I-cache (paddr: %#x)\n", tid, mem_req->getPaddr());
+
+        // Try to send the request. If it fails, clean up
+        if (!icachePort.sendTimingReq(data_pkt)) {
+            DPRINTF(Fetch, "[tid:%i] Alternate path I-cache access failed, "
+                    "port busy\n", tid);
+            delete[] data_pkt->getPtr<uint8_t>();
+            delete data_pkt;
+            outstandingAltFetches.erase(it);
+            altPathTranslations.erase(altPC);
+        }
+        // Note: packet will be handled in handleIcacheTimingResp
+    } else {
+        // Translation fault - just drop this alternate path fetch
+        DPRINTF(Fetch, "[tid:%i] Alternate path translation fault (%s) for %#x, dropping\n",
+                tid, fault->name(), altPC);
+        outstandingAltFetches.erase(it);
+        altPathTranslations.erase(altPC);
+    }
+}
+
+void
+Fetch::processDeferredAltPathFetches()
+{
+    // Process deferred alternate path fetches when cache is no longer blocked
+    if (cacheBlocked || deferredAltFetches.empty()) {
+        return;
+    }
+
+    DPRINTF(Fetch, "Processing %d deferred alternate path fetches\n",
+            deferredAltFetches.size());
+
+    // Process all deferred fetches (they will check their own constraints)
+    while (!deferredAltFetches.empty()) {
+        DeferredAltFetch deferred = deferredAltFetches.front();
+        deferredAltFetches.pop_front();
+
+        DPRINTF(Fetch, "[tid:%i] Processing deferred alternate path fetch for %#x\n",
+                deferred.tid, deferred.altVaddr);
+
+        ++fetchStats.altPathFetchDeferredProcessed;
+
+        // Recursively call fetchAlternatePath - it will handle all checks
+        // including if cache becomes blocked again
+        fetchAlternatePath(deferred.altVaddr, deferred.tid, deferred.branchPC);
+
+        // If cache became blocked while processing, stop and save remaining for later
+        if (cacheBlocked) {
+            DPRINTF(Fetch, "Cache blocked again, %d fetches still deferred\n",
+                    deferredAltFetches.size());
+            break;
+        }
+    }
 }
 
 void
@@ -733,6 +1001,18 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
     // Empty fetch queue
     fetchQueue[tid].clear();
 
+    // Clean up any outstanding alternate path fetches for this thread
+    for (auto it = outstandingAltFetches.begin(); it != outstandingAltFetches.end();) {
+        auto trans_it = altPathTranslations.find(*it);
+        if (trans_it != altPathTranslations.end() && trans_it->second.second == tid) {
+            // This alternate fetch belongs to the squashed thread
+            altPathTranslations.erase(trans_it);
+            it = outstandingAltFetches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // microops are being squashed, it is not known wheather the
     // youngest non-squashed microop was  marked delayed commit
     // or not. Setting the flag to true ensures that the
@@ -809,6 +1089,11 @@ Fetch::squash(const PCStateBase &new_pc, const InstSeqNum seq_num,
         DynInstPtr squashInst, ThreadID tid)
 {
     DPRINTF(Fetch, "[tid:%i] Squash from commit.\n", tid);
+
+    // Track squash timing for recovery latency measurement
+    squashStartTick[tid] = curTick();
+    squashIsBranchMisp[tid] = (squashInst && squashInst->isControl() &&
+                               squashInst->mispredicted());
 
     doSquash(new_pc, squashInst, tid);
 
@@ -909,6 +1194,9 @@ Fetch::tick()
         DPRINTF(Activity, "Activity this cycle.\n");
         cpu->activityThisCycle();
     }
+
+    // Process any deferred alternate path fetches
+    processDeferredAltPathFetches();
 
     // Reset the number of the instruction we've fetched.
     numInst = 0;
@@ -1100,7 +1388,7 @@ Fetch::fetchCacheLineNonBlocking(Addr linePC, uint8_t *dst, int size, ThreadID t
         alignedPC,                          // physical/virtual? Use existing code path
         size,
         Request::INST_FETCH,
-        cpu->instMasterId());
+        cpu->instRequestorId());
 
     // Build packet and allocate a dynamic buffer to hold the returned data.
     PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
@@ -1133,45 +1421,14 @@ Fetch::fetchCacheLineNonBlocking(Addr linePC, uint8_t *dst, int size, ThreadID t
 void
 Fetch::handleIcacheTimingResp(PacketPtr pkt)
 {
-    // Extract the address from the packet.
-    // Use the same function used elsewhere in your fetch stage.
-    Addr addr = pkt->req->getVaddr();   // or getPaddr(), whichever your CPU uses
-    Addr alignedPC = fetchBufferAlignPC(addr);
-
-    // -------------------------------
-    // Case 1: This is an alternate-path (APB) speculative fetch response.
-    // -------------------------------
-    auto it = outstandingAltFetches.find(alignedPC);
-    if (it != outstandingAltFetches.end()) {
-
-        const uint8_t *data = pkt->getConstPtr<uint8_t>();
-
-        if (apb) {
-            apb->insertLine(alignedPC, data, fetchBufferSize);
-            DPRINTF(Fetch, "APB inserted line for %#x from timing response\n", alignedPC);
-        }
-
-        // Remove marker
-        outstandingAltFetches.erase(it);
-
-        // Free packet buffers (we allocated them)
-        delete[] pkt->getPtr<uint8_t>();
-        delete pkt;
-
-        return;  // DONE — do NOT forward to processCacheCompletion
-    }
-
-    // -------------------------------
-    // Case 2: This response belongs to the normal instruction fetch path.
-    // Forward exactly as original gem5 intended.
-    // -------------------------------
     DPRINTF(O3CPU, "Fetch unit received timing\n");
 
-    // This is the original assert
+    // Original gem5 assertion
     assert(pkt->req->isUncacheable() ||
            !(pkt->cacheResponding() && !pkt->hasSharers()));
 
-    // The original code path — REQUIRED
+    // Process all cache completions through the normal path
+    // This properly handles MSHR cleanup for both normal and alternate path fetches
     processCacheCompletion(pkt);
 }
 
@@ -1227,6 +1484,19 @@ Fetch::fetch(bool &status_change)
                 fetchBufferValid[tid] = true;
                 fetchStatus[tid] = Running;
                 status_change = true;
+
+                // Track APB-assisted recovery
+                if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {
+                    Tick recoveryTime = curTick() - squashStartTick[tid];
+                    ++fetchStats.apbRecoveryHits;
+                    fetchStats.apbHitRecoveryLatency.sample(recoveryTime);
+                    fetchStats.recoveryLatency.sample(recoveryTime);
+                    fetchStats.branchMispredRecoveryCycles += recoveryTime;
+                    DPRINTF(Fetch, "[tid:%i] APB hit for recovery! Latency: %d cycles\n",
+                            tid, recoveryTime);
+                    squashStartTick[tid] = 0;
+                    squashIsBranchMisp[tid] = false;
+                }
             } else {
                 // APB miss: fall back to L1I
                 DPRINTF(Fetch, "[tid:%i] APB miss for PC %s, falling back to I-cache\n", tid, this_pc);
@@ -1340,32 +1610,12 @@ Fetch::fetch(bool &status_change)
                 if (dec_ptr->instReady()) {
                     staticInst = dec_ptr->decode(this_pc);
 
-                    if (staticInst->isBranch()) {
-                        Addr predictedPC = next_pc->instAddr();      // normal predicted path
-                        Addr fallThroughPC = staticInst->fallThroughPC();
-                        Addr targetPC = staticInst->branchTargetPC();
-
-                        // Determine alternate path
-                        Addr altPC = (predictedPC == targetPC) ? fallThroughPC : targetPC;
-
-                        // Align it for the fetch buffer
-                        Addr altLinePC = fetchBufferAlignPC(altPC);
-
-                        // Only populate if APB doesn't already have it
-                        if (apb && !apb->contains(altLinePC)) {
-                            uint8_t altData[fetchBufferSize];
-
-                            // Speculatively read from L1I (non-blocking if possible)
-                            // Use your normal fetchCacheLine logic, but just to fill altData
-                            bool ok = fetchCacheLineNonBlocking(altLinePC, altData, fetchBufferSize, tid);
-
-                            if (ok) {
-                                apb->insertLine(altLinePC, altData, fetchBufferSize);
-                                DPRINTF(Fetch, "Inserted alternate path into APB at PC %s\n", altLinePC);
-                            }
-                        }
-                    }
-
+                    // TODO: Add APB alternate path logic here when integrated with branch predictor
+                    // For now, commenting out to fix compilation
+                    // if (staticInst->isControl()) {
+                    //     // Get predicted target from branch predictor
+                    //     // Determine alternate path and speculatively fetch
+                    // }
 
                     // Increment stat of fetched instructions.
                     cpu->fetchStats[tid]->numInsts++;
@@ -1493,12 +1743,18 @@ Fetch::recvReqRetry()
             retryPkt = NULL;
             retryTid = InvalidThreadID;
             cacheBlocked = false;
+
+            // Process any deferred alternate path fetches now that cache is unblocked
+            processDeferredAltPathFetches();
         }
     } else {
         assert(retryTid == InvalidThreadID);
         // Access has been squashed since it was sent out.  Just clear
         // the cache being blocked.
         cacheBlocked = false;
+
+        // Process any deferred alternate path fetches now that cache is unblocked
+        processDeferredAltPathFetches();
     }
 }
 

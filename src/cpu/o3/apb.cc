@@ -1,58 +1,52 @@
-#include "cpu/o3/APB.hh"
+#include "cpu/o3/apb.hh"
 #include <cstring>
 #include <cmath>
+#include "debug/APB.hh"
 
 using namespace std;
 using namespace gem5;
 
-APB::APB(const APBParams &p)
+APB::APB(const Params &p)
     : SimObject(p),
-      cpu_side(this, "CPU fetch port"),
-      l1i_side(this, "L1I master port"),
       numEntries(p.num_entries),
       lineSize(p.line_size),
       lineBits(log2(p.line_size)),
       indexMask(p.num_entries - 1),
-      table(p.num_entries)
+      table(p.num_entries),
+      stats(this)
 {
-    // Initialize stats
-    stats.accesses = 0;
-    stats.hits     = 0;
-    stats.misses   = 0;
-    stats.inserts  = 0;
 }
 
 // Check if a PC exists in the buffer
 bool APB::contains(Addr pc) const
 {
-    stats.accesses++;
-
     int idx = index(pc);
     const Entry &e = table[idx];
 
-    if (e.valid && e.tag == tagFromPc(pc)) {
-        stats.hits++;
-        return true;
+    bool hit = e.valid && e.tag == tagFromPc(pc);
+    const_cast<APB*>(this)->stats.accesses++;
+    if (hit) {
+        const_cast<APB*>(this)->stats.hits++;
+    } else {
+        const_cast<APB*>(this)->stats.misses++;
     }
-
-    stats.misses++;
-    return false;
+    DPRINTF(APB, "contains(0x%x): %s (idx=%d, tag=0x%x)\n",
+            pc, hit ? "HIT" : "MISS", idx, tagFromPc(pc));
+    return hit;
 }
 
 // Read a line from APB
 const uint8_t* APB::readLine(Addr pc) const
 {
-    stats.accesses++;
-
     int idx = index(pc);
     const Entry &e = table[idx];
 
     if (e.valid && e.tag == tagFromPc(pc)) {
-        stats.hits++;
+        DPRINTF(APB, "readLine(0x%x): HIT, returning data\n", pc);
         return e.data.data();
     }
 
-    stats.misses++;
+    DPRINTF(APB, "readLine(0x%x): MISS\n", pc);
     return nullptr;
 }
 
@@ -64,10 +58,13 @@ void APB::insertLine(Addr pc, const uint8_t* data, int size)
 
     e.tag = tagFromPc(pc);
     e.valid = true;
-    e.data.resize(lineSize); // ensure correct line size
-    memcpy(e.data.data(), data, std::min(size, lineSize));
+    e.data.resize(lineSize);
+    memcpy(e.data.data(), data, std::min(size, (int)lineSize));
 
     stats.inserts++;
+
+    DPRINTF(APB, "insertLine(0x%x): inserted at idx=%d, tag=0x%x\n",
+            pc, idx, e.tag);
 }
 
 // Invalidate all entries
@@ -79,11 +76,15 @@ void APB::invalidateAll()
 }
 
 // Constructor for APBStats
-APB::APBStats::APBStats(statistics::Group *parent)
-    : statistics::Group(parent)
+APB::APBStats::APBStats(APB *apb)
+    : statistics::Group(apb),
+      ADD_STAT(accesses, statistics::units::Count::get(),
+               "Number of APB accesses"),
+      ADD_STAT(hits, statistics::units::Count::get(),
+               "Number of APB hits"),
+      ADD_STAT(misses, statistics::units::Count::get(),
+               "Number of APB misses"),
+      ADD_STAT(inserts, statistics::units::Count::get(),
+               "Number of APB inserts")
 {
-    accesses = defineScalar("accesses", "Number of APB accesses");
-    hits     = defineScalar("hits", "Number of APB hits");
-    misses   = defineScalar("misses", "Number of APB misses");
-    inserts  = defineScalar("inserts", "Number of APB inserts");
 }

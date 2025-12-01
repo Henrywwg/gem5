@@ -1,0 +1,169 @@
+================================================================================
+                  DAXPY BENCHMARK EVALUATION RESULTS
+           Baseline O3CPU Configuration (Region of Interest Analysis)
+================================================================================
+
+Date: November 30, 2025
+Configuration: X86O3CPU @ 2GHz, 512MiB RAM
+L1I: 16kB, L1D: 64kB, L2: 256kB
+
+================================================================================
+                            PERFORMANCE SUMMARY
+================================================================================
+
+Benchmark                  IPC      Sim Time (ms)  Branches    Mispreds   Rate
+--------------------------------------------------------------------------------
+Baseline (No Branches)     0.21     0.64          32,792      7          0.02%
+Progressive (50%→95%)      1.16     2.49          642,321     21,481     3.34%
+Random (50/50)             1.06     2.59          725,666     33,484     4.61%
+================================================================================
+
+================================================================================
+                          DETAILED OBSERVATIONS
+================================================================================
+
+1. BASELINE (No Branches) - Control Benchmark
+   ┌────────────────────────────────────────────────────────────┐
+   │ • IPC: 0.21 (lowest - likely due to minimal ROI work)     │
+   │ • Misprediction Rate: 0.02% (near perfect prediction)     │
+   │ • Branch Count: 32,792 (minimal branching)                │
+   │ • Behavior: Standard DAXPY with no conditional branches   │
+   └────────────────────────────────────────────────────────────┘
+
+2. PROGRESSIVE (50% → 95% Predictability) - Warming Benchmark
+   ┌────────────────────────────────────────────────────────────┐
+   │ • IPC: 1.16 (highest - good branch execution)             │
+   │ • Misprediction Rate: 3.34% (moderate)                    │
+   │ • Branch Count: 642,321 (significant branching)           │
+   │ • Total Mispredictions: 21,481                            │
+   │                                                            │
+   │ Expected Behavior:                                         │
+   │   - Early: ~50% predictable → high mispredictions         │
+   │   - Middle: Predictor warming → decreasing mispreds       │
+   │   - Late: ~95% predictable → low mispredictions           │
+   │                                                            │
+   │ Result: 3.34% average misprediction rate suggests         │
+   │ predictor successfully learned the pattern over time      │
+   └────────────────────────────────────────────────────────────┘
+
+3. RANDOM (50/50 Throughout) - Worst-Case Benchmark
+   ┌────────────────────────────────────────────────────────────┐
+   │ • IPC: 1.06 (lower than progressive)                       │
+   │ • Misprediction Rate: 4.61% (highest)                     │
+   │ • Branch Count: 725,666 (most branches)                   │
+   │ • Total Mispredictions: 33,484                            │
+   │                                                            │
+   │ Expected Behavior:                                         │
+   │   - Consistently 50/50 unpredictable throughout           │
+   │   - Should maintain high misprediction rate               │
+   │                                                            │
+   │ Result: 4.61% misprediction rate (higher than progressive │
+   │ but lower than expected ~50% - predictor may be finding   │
+   │ some patterns in the "random" sequence)                   │
+   └────────────────────────────────────────────────────────────┘
+
+================================================================================
+                    PERFORMANCE COMPARISON (vs Baseline)
+================================================================================
+
+Metric                     Progressive         Random
+--------------------------------------------------------------------------------
+IPC Change                 +461.7%             +414.0%
+Execution Time             +290.6%             +306.6%
+Branch Activity            +1858.6%            +2112.6%
+Mispredictions            +306,657.1%         +478,257.1%
+Mispred Rate Change        +3.32 pp            +4.59 pp
+
+Note: Baseline has very minimal ROI work, making percentage comparisons less
+      meaningful. Focus on absolute values and branch behavior differences.
+
+================================================================================
+                    IMPLICATIONS FOR DUAL-PATH EXECUTION
+================================================================================
+
+Based on these baseline results, when dual-path execution is enabled:
+
+┌─ PROGRESSIVE BENCHMARK (Key Test Case) ──────────────────────────────────┐
+│                                                                            │
+│ Phase 1: COLD START (Early Iterations)                                    │
+│   • High misprediction rate (~50%)                                        │
+│   • ✓ Dual-path mode should activate                                      │
+│   • ✓ APB stores alternate-path instructions                              │
+│   • ✓ Performance benefit from having both paths ready                    │
+│                                                                            │
+│ Phase 2: WARMING (Middle Iterations)                                      │
+│   • Decreasing misprediction rate (50% → 95%)                             │
+│   • → Transition period                                                    │
+│   • → DualPathSwitcher monitors misprediction window                      │
+│   • → Evaluates thresholds (default: 85% high, 70% low)                   │
+│                                                                            │
+│ Phase 3: WARM (Late Iterations)                                           │
+│   • Low misprediction rate (~5%)                                          │
+│   • ✓ Should switch to single-path mode                                   │
+│   • ✓ More efficient execution without dual-path overhead                 │
+│   • ✓ Demonstrates adaptive behavior                                      │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌─ RANDOM BENCHMARK (Stress Test) ─────────────────────────────────────────┐
+│                                                                            │
+│   • Consistently high misprediction rate (~4.61%)                         │
+│   • ✓ Dual-path mode should remain active throughout                      │
+│   • ✓ Demonstrates sustained benefit for unpredictable branches           │
+│   • ✓ Shows when dual-path execution provides value                       │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                          TARGET METRICS FOR PROJECT
+================================================================================
+
+Project Goal: Demonstrate 1 ≤ %ΔPerf/%ΔPower
+
+To evaluate dual-path execution effectiveness:
+
+1. Performance Metrics:
+   □ IPC improvement during cold-start phase
+   □ Misprediction rate reduction with dual-path active
+   □ Smooth transition from dual-path to single-path mode
+   □ Overall execution time comparison
+
+2. Power Metrics (via McPAT):
+   □ Power consumption during dual-path mode
+   □ Power consumption during single-path mode
+   □ Energy efficiency ratio
+
+3. Adaptive Behavior:
+   □ Mode switching triggers correctly based on thresholds
+   □ Window size effectiveness for tracking misprediction rate
+   □ APB occupancy and utilization
+
+================================================================================
+                            FILES GENERATED
+================================================================================
+
+1. benchmark_comparison.json     - Raw statistics in JSON format
+2. EVALUATION_RESULTS.txt         - This comprehensive report (current file)
+3. baseline_daxpy/               - Baseline benchmark results
+4. baseline_progressive/         - Progressive warming benchmark results
+5. baseline_random/              - Random branch benchmark results
+
+Note: Dual-path configuration results are not included due to APB/
+      DualPathSwitcher components requiring implementation in gem5.
+
+================================================================================
+                              NEXT STEPS
+================================================================================
+
+To complete the dual-path execution evaluation:
+
+1. ✓ Benchmarks compiled and working
+2. ✓ Baseline evaluations completed
+3. □ Implement APB (Alternate Path Buffer) in gem5
+4. □ Implement DualPathSwitcher policy
+5. □ Run dual-path evaluations
+6. □ Compare baseline vs dual-path results
+7. □ Generate power analysis with McPAT
+8. □ Calculate %ΔPerf/%ΔPower ratio
+
+================================================================================

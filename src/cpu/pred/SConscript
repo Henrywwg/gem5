@@ -61,6 +61,8 @@ SimObject('BranchPredictor.py',
     'MultiperspectivePerceptronTAGE8KB'],
     enums=['BranchType', 'TargetProvider'])
 
+SimObject('DPSTAGE.py', sim_objects=['DPSTAGE'])
+
 Source('bpred_unit.cc')
 Source('2bit_local.cc')
 Source('simple_indirect.cc')
@@ -82,6 +84,7 @@ Source('statistical_corrector.cc')
 Source('tage_sc_l.cc')
 Source('tage_sc_l_8KB.cc')
 Source('tage_sc_l_64KB.cc')
+Source('DualPathSwitching.cc')
 Source('btb.cc')
 Source('simple_btb.cc')
 DebugFlag('Indirect')
@@ -92,3 +95,4 @@ DebugFlag('Branch')
 DebugFlag('Tage')
 DebugFlag('LTage')
 DebugFlag('TageSCL')
+DebugFlag('DPSTAGE')

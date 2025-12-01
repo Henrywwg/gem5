@@ -41,6 +41,9 @@
 #ifndef __CPU_O3_FETCH_HH__
 #define __CPU_O3_FETCH_HH__
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "arch/generic/decoder.hh"
 #include "arch/generic/mmu.hh"
 #include "base/random.hh"
@@ -119,6 +122,29 @@ class Fetch
         {
             assert(mode == BaseMMU::Execute);
             fetch->finishTranslation(fault, req);
+            delete this;
+        }
+    };
+
+    class FetchTranslationAlt : public BaseMMU::Translation
+    {
+      protected:
+        Fetch *fetch;
+        Addr altPC;
+        ThreadID tid;
+
+      public:
+        FetchTranslationAlt(Fetch *_fetch, Addr _altPC, ThreadID _tid)
+            : fetch(_fetch), altPC(_altPC), tid(_tid) {}
+
+        void markDelayed() {}
+
+        void
+        finish(const Fault &fault, const RequestPtr &req,
+            gem5::ThreadContext *tc, BaseMMU::Mode mode)
+        {
+            assert(mode == BaseMMU::Execute);
+            fetch->finishTranslationAlt(fault, req, altPC, tid);
             delete this;
         }
     };
@@ -224,6 +250,9 @@ class Fetch
     /** Sets pointer to time buffer used to communicate to the next stage. */
     void setFetchQueue(TimeBuffer<FetchStruct> *fq_ptr);
 
+    /** Sets pointer to the APB. */
+    void setAPB(APB *apb_ptr) { apb = apb_ptr; }
+
     /** Initialize stage. */
     void startupStage();
 
@@ -302,6 +331,10 @@ class Fetch
      */
     bool fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc);
     void finishTranslation(const Fault &fault, const RequestPtr &mem_req);
+    void finishTranslationAlt(const Fault &fault, const RequestPtr &mem_req,
+                              Addr altPC, ThreadID tid);
+    void fetchAlternatePath(Addr altVaddr, ThreadID tid, Addr branchPC);
+    void processDeferredAltPathFetches();
 
 
     /** Check if an interrupt is pending and that we need to handle
@@ -407,6 +440,9 @@ class Fetch
     // Track outstanding speculative alternate-path requests (aligned line addresses)
     std::unordered_set<Addr> outstandingAltFetches;
 
+    // Track alternate path requests awaiting translation (vaddr -> branch PC)
+    std::unordered_map<Addr, std::pair<Addr, ThreadID>> altPathTranslations;
+
     // (optional) debug control
     bool debugAltFetch = true;
 
@@ -483,6 +519,15 @@ class Fetch
     /** Is the cache blocked?  If so no threads can access it. */
     bool cacheBlocked;
 
+    /** Queue for alternate path fetches deferred due to cache being blocked */
+    struct DeferredAltFetch {
+        Addr altVaddr;
+        ThreadID tid;
+        Addr branchPC;
+    };
+    std::deque<DeferredAltFetch> deferredAltFetches;
+    static const size_t MAX_DEFERRED_ALT_FETCHES = 16;
+
     /** The packet that is waiting to be retried. */
     PacketPtr retryPkt;
 
@@ -547,6 +592,12 @@ class Fetch
     /** Event used to delay fault generation of translation faults */
     FinishTranslationEvent finishTranslationEvent;
 
+    /** Track squash start time for recovery latency measurement */
+    Tick squashStartTick[MaxThreads];
+
+    /** Track if current squash was due to branch misprediction */
+    bool squashIsBranchMisp[MaxThreads];
+
   protected:
     struct FetchStatGroup : public statistics::Group
     {
@@ -595,6 +646,38 @@ class Fetch
         statistics::Distribution nisnDist;
         /** Rate of how often fetch was idle. */
         statistics::Formula idleRate;
+
+        // Alternate path fetch statistics
+        /** Total number of alternate path fetch requests initiated. */
+        statistics::Scalar altPathFetchRequests;
+        /** Number of alternate path fetches that completed successfully. */
+        statistics::Scalar altPathFetchCompleted;
+        /** Number of alternate path fetches squashed before completion. */
+        statistics::Scalar altPathFetchSquashed;
+        /** Number of cache lines fetched for alternate paths. */
+        statistics::Scalar altPathCacheLines;
+
+        // Deferred alternate path fetch statistics
+        /** Number of alternate path fetches deferred due to cache blocked. */
+        statistics::Scalar altPathFetchDeferred;
+        /** Number of deferred alternate path fetches successfully processed later. */
+        statistics::Scalar altPathFetchDeferredProcessed;
+        /** Number of deferred alternate path fetches dropped due to queue full. */
+        statistics::Scalar altPathFetchDeferredDropped;
+
+        // Branch misprediction recovery statistics
+        /** Total cycles spent recovering from branch mispredictions. */
+        statistics::Scalar branchMispredRecoveryCycles;
+        /** Number of branch mispredictions where APB had the correct path. */
+        statistics::Scalar apbRecoveryHits;
+        /** Number of branch mispredictions where APB did not have the path. */
+        statistics::Scalar apbRecoveryMisses;
+        /** Distribution of recovery latency for mispredictions. */
+        statistics::Distribution recoveryLatency;
+        /** Distribution of recovery latency when APB hits. */
+        statistics::Distribution apbHitRecoveryLatency;
+        /** Distribution of recovery latency when APB misses. */
+        statistics::Distribution apbMissRecoveryLatency;
     } fetchStats;
 };
 

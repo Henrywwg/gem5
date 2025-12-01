@@ -37,10 +37,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from m5.defines import buildEnv
-from m5.objects.BaseCPU import BaseCPU
 
 # from m5.objects.O3Checker import O3Checker
+from m5.objects.APB import *
+from m5.objects.BaseCPU import BaseCPU
 from m5.objects.BranchPredictor import *
+from m5.objects.DualPathSwitcher import *
 from m5.objects.FUPool import *
 from m5.objects.IndexingPolicies import *
 from m5.objects.ReplacementPolicies import *
@@ -205,6 +207,13 @@ class BaseO3CPU(BaseCPU):
     branchPred = Param.BranchPredictor(
         TournamentBP(numThreads=Parent.numThreads), "Branch Predictor"
     )
+
+    apb = Param.APB(NULL, "Alternate Path Buffer")
+
+    dualPathSwitcher = Param.DualPathSwitcher(
+        NULL, "Dual-Path Execution Switcher"
+    )
+
     needsTSO = Param.Bool(False, "Enable TSO Memory model")
 
     recvRespThrottling = Param.Bool(

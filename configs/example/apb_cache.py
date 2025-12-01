@@ -35,37 +35,37 @@ parser.add_argument(
     help="Memory configuration to use",
 )
 parser.add_argument(
-    "--l1i_size", 
+    "--l1i_size",
     type=str,
     default="16KiB",
     help="L1 instruction cache size",
 )
 parser.add_argument(
-    "--l1i_assoc", 
+    "--l1i_assoc",
     type=int,
     default=8,
     help="L1 instruction cache associativity",
 )
 parser.add_argument(
-    "--l1d_size", 
+    "--l1d_size",
     type=str,
     default="16KiB",
     help="L1 data cache size",
 )
 parser.add_argument(
-    "--l1d_assoc", 
+    "--l1d_assoc",
     type=int,
     default=8,
     help="L1 data cache associativity",
 )
 parser.add_argument(
-    "--l2_size", 
+    "--l2_size",
     type=str,
     default="128KiB",
     help="L2 cache size",
 )
 parser.add_argument(
-    "--l2_assoc", 
+    "--l2_assoc",
     type=int,
     default=16,
     help="L2 cache associativity",
@@ -103,9 +103,9 @@ system.cpu.dcache.connectCPU(system.cpu)
 system.apb = APB(num_entries=64, line_size=64)
 
 # Connect CPU fetch port to APB
-system.cpu.fetch_from_apb_port = system.apb.cpu_side  
-system.apb.l1i_side = system.cpu.icache.cpu_side 
-system.cpu.apb = system.apb      
+system.cpu.fetch_from_apb_port = system.apb.cpu_side
+system.apb.l1i_side = system.cpu.icache.cpu_side
+system.cpu.apb = system.apb
 
 # L2 bus (connects L1 caches to L2)
 system.l2bus = L2XBar()

@@ -4,7 +4,7 @@
 #include "sim/sim_object.hh"
 #include "base/statistics.hh"
 #include "base/types.hh"
-#include "mem/port.hh"
+#include "params/APB.hh"
 #include <vector>
 #include <cstdint>
 #include <cmath>
@@ -12,31 +12,23 @@
 namespace gem5
 {
 
-struct APBParams : public SimObjectParams
-{
-    APBParams(const std::string &name) : SimObjectParams(name) {}
-
-    unsigned num_entries = 64; // default
-    unsigned line_size   = 64; // bytes per entry
-};
-
 class APB : public SimObject
 {
   public:
-    APB(const APBParams &p);
-
-    // Ports
-    SlavePort cpu_side;   
-    MasterPort l1i_side; 
+    using Params = APBParams;
+    APB(const Params &p);
 
     bool contains(Addr pc) const;
     const uint8_t* readLine(Addr pc) const;
     void insertLine(Addr pc, const uint8_t* data, int size);
     void invalidateAll();
 
+    unsigned getNumEntries() const { return numEntries; }
+    unsigned getLineSize() const { return lineSize; }
+
     struct APBStats : public statistics::Group
     {
-        APBStats(statistics::Group *parent);
+        APBStats(APB *apb);
         statistics::Scalar accesses;
         statistics::Scalar hits;
         statistics::Scalar misses;

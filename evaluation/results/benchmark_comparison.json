@@ -1,0 +1,35 @@
+{
+  "Baseline (No Branches)": {
+    "sim_ticks": 636456000.0,
+    "sim_seconds": 0.000636,
+    "ipc": 0.205948,
+    "num_cycles": 1272912.0,
+    "branch_mispreds": 7.0,
+    "branch_preds": 32792.0,
+    "committed_insts": 0,
+    "committed_ops": 0,
+    "mispred_rate": 0.021346669919492557
+  },
+  "Progressive (50%\u219295%)": {
+    "sim_ticks": 2487357500.0,
+    "sim_seconds": 0.002487,
+    "ipc": 1.156811,
+    "num_cycles": 4974715.0,
+    "branch_mispreds": 21481.0,
+    "branch_preds": 642321.0,
+    "committed_insts": 0,
+    "committed_ops": 0,
+    "mispred_rate": 3.3442780167548625
+  },
+  "Random (50/50)": {
+    "sim_ticks": 2587351500.0,
+    "sim_seconds": 0.002587,
+    "ipc": 1.058506,
+    "num_cycles": 5174703.0,
+    "branch_mispreds": 33484.0,
+    "branch_preds": 725666.0,
+    "committed_insts": 0,
+    "committed_ops": 0,
+    "mispred_rate": 4.614244018598088
+  }
+}

@@ -815,6 +815,13 @@ Commit::commit()
                      toIEW->commitInfo[tid].branchTaken = true;
                 }
                 ++stats.branchMispredicts;
+
+                // Update dual-path switcher with misprediction
+                if (cpu->dualPathSwitcher) {
+                    // Get actual confidence from the mispredicted instruction
+                    double confidence = toIEW->commitInfo[tid].mispredictInst->getBranchPredConfidence();
+                    cpu->dualPathSwitcher->update(false, confidence); // incorrect prediction
+                }
             }
 
             set(toIEW->commitInfo[tid].pc, fromIEW->pc[tid]);
@@ -1251,6 +1258,13 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
     // the HTM UID is purely for correctness and debugging purposes
     if (head_inst->isHtmStart())
         iewStage->setLastRetiredHtmUid(tid, head_inst->getHtmTransactionUid());
+
+    // Update dual-path switcher for correctly predicted branches
+    if (cpu->dualPathSwitcher && head_inst->isControl()) {
+        // Get actual confidence from the correctly predicted instruction
+        double confidence = head_inst->getBranchPredConfidence();
+        cpu->dualPathSwitcher->update(true, confidence);
+    }
 
     // Finally clear the head ROB entry.
     rob->retireHead(tid);

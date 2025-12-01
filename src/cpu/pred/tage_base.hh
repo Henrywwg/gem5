@@ -471,6 +471,13 @@ class TAGEBase : public SimObject
         return false;
     }
 
+    /**
+     * Get confidence value for a prediction based on counter saturation.
+     * Uses the same criteria as isHighConfidence but returns a continuous
+     * value between 0.0 and 1.0.
+     */
+    virtual double getConfidence(BranchInfo* bi) const;
+
     unsigned getGHR(ThreadID tid) const;
     int8_t getCtr(int hitBank, int hitBankIndex) const;
     unsigned getTageCtrBits() const;

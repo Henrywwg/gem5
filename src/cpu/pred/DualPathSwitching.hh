@@ -44,12 +44,13 @@
  */
 
 /* @file
- * Implementation of a TAGE branch predictor. TAGE is a global-history based
+ * Implementation of a L-TAGE branch predictor. TAGE is a global-history based
  * branch predictor. It features a PC-indexed bimodal predictor and N
  * partially tagged tables, indexed with a hash of the PC and the global
  * branch history. The different lengths of global branch history used to
  * index the partially tagged tables grow geometrically. A small path history
- * is also used in the hash.
+ * is also used in the hash. L-TAGE also features a loop predictor that records
+ * iteration count of loops and predicts accordingly.
  *
  * All TAGE tables are accessed in parallel, and the one using the longest
  * history that matches provides the prediction (some exceptions apply).
@@ -57,16 +58,21 @@
  * one that predicted when the prediction is incorrect.
  */
 
-#ifndef __CPU_PRED_TAGE_HH__
-#define __CPU_PRED_TAGE_HH__
+#ifndef __CPU_PRED_DPSTAGE_HH__
+#define __CPU_PRED_DPSTAGE_HH__
 
+// C++ standard library
+#include <deque>
 #include <vector>
 
-#include "base/random.hh"
+// Boost
+#include <boost/circular_buffer.hpp>
+
+// gem5 headers
 #include "base/types.hh"
-#include "cpu/pred/bpred_unit.hh"
-#include "cpu/pred/tage_base.hh"
-#include "params/TAGE.hh"
+#include "cpu/pred/loop_predictor.hh"
+#include "cpu/pred/tage.hh"
+#include "params/DPSTAGE.hh"
 
 namespace gem5
 {
@@ -74,57 +80,78 @@ namespace gem5
 namespace branch_prediction
 {
 
-class TAGE: public BPredUnit
+class DPSTAGE : public TAGE
 {
+  public:
+    DPSTAGE(const DPSTAGEParams &params);
+
+    // Base class methods.
+    void squash(ThreadID tid, void * &bp_history) override;
+    void update(ThreadID tid, Addr pc, bool taken,
+                void * &bp_history, bool squashed,
+                const StaticInstPtr & inst, Addr target) override;
+    void branchPlaceholder(ThreadID tid, Addr pc,
+                           bool uncond, void * &bp_history) override;
+    void init() override;
+
+    bool useDualPath() const { return dualPathMode; }
+    double getCurrentAccuracy() const {
+      return accuracyWindow.empty() ? 0.0 :
+            static_cast<double>(correctCount) / accuracyWindow.size();
+    }
+
   protected:
-    TAGEBase *tage;
 
-    Random::RandomPtr rng = Random::genRandom();
+    //DPS tags
+    boost::circular_buffer<bool> accuracyWindow;
+    unsigned correctCount;
+    bool dualPathMode;  //Are we using SDPE rn
+    double threshold;   //Threshold to switch from TAGE-BP to SDPE
 
-    struct TageBranchInfo
+    /** The loop predictor object */
+    LoopPredictor *loopPredictor;
+
+
+
+    // more provider types
+    enum
     {
-        TAGEBase::BranchInfo *tageBranchInfo;
+        LOOP = TAGEBase::LAST_TAGE_PROVIDER_TYPE + 1,
+        LAST_DPSTAGE_PROVIDER_TYPE = LOOP
+    };
 
-        TageBranchInfo(TAGEBase &tage, Addr pc, bool conditional)
-        : tageBranchInfo(tage.makeBranchInfo(pc, conditional))
+    // Primary branch history entry
+    struct DPSTAGEBranchInfo : public TageBranchInfo
+    {
+        LoopPredictor::BranchInfo *lpBranchInfo;
+        DPSTAGEBranchInfo(TAGEBase &tage, LoopPredictor &lp,
+                        Addr pc, bool conditional)
+          : TageBranchInfo(tage, pc, conditional),
+            lpBranchInfo(lp.makeBranchInfo())
         {}
 
-        virtual ~TageBranchInfo()
+        virtual ~DPSTAGEBranchInfo()
         {
-            delete tageBranchInfo;
+            delete lpBranchInfo;
+            lpBranchInfo = nullptr;
         }
     };
 
-    virtual bool predict(ThreadID tid, Addr branch_pc, bool cond_branch,
-                         void* &b);
-
-    double getConfidence(void *bp_history) const override
-    {
-        if (bp_history) {
-            TageBranchInfo *bi = static_cast<TageBranchInfo*>(bp_history);
-            return tage->getConfidence(bi->tageBranchInfo);
-        }
-        return 0.5;  // Neutral confidence if no history
-    }
-
-  public:
-
-    TAGE(const TAGEParams &params);
-
-    // Base class methods.
-    bool lookup(ThreadID tid, Addr pc, void* &bp_history) override;
-    void updateHistories(ThreadID tid, Addr pc, bool uncond,
-                         bool taken, Addr target, const StaticInstPtr &inst,
-                         void * &bp_history) override;
-    void update(ThreadID tid, Addr pc, bool taken, void * &bp_history,
-                bool squashed, const StaticInstPtr &inst,
-                Addr target) override;
-    void squash(ThreadID tid, void * &bp_history) override;
-    void branchPlaceholder(ThreadID tid, Addr pc,
-                           bool uncond, void * &bp_history) override;
+    /**
+     * Get a branch prediction from DPSTAGE. *NOT* an override of
+     * BpredUnit::predict().
+     * @param tid The thread ID to select the global
+     * histories to use.
+     * @param branch_pc The unshifted branch PC.
+     * @param cond_branch True if the branch is conditional.
+     * @param b Reference to wrapping pointer to allow storing
+     * derived class prediction information in the base class.
+     */
+    bool predict(
+        ThreadID tid, Addr branch_pc, bool cond_branch, void* &b) override;
 };
 
 } // namespace branch_prediction
 } // namespace gem5
 
-#endif // __CPU_PRED_TAGE_HH__
+#endif // __CPU_PRED_DPSTAGE_HH__

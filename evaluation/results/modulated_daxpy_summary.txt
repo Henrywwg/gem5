@@ -1,0 +1,154 @@
+================================================================================
+MODULATED DAXPY RESULTS - SELECTIVE (70% CONF) vs GLOBAL vs BASELINE
+================================================================================
+
+Configuration:
+- Benchmark: Modulated DAXPY with random phase resets
+- Phase pattern: 50% → 95% predictability (linear progression)
+- Reset probability: 2% per iteration (1314 resets over 65,536 iterations)
+- APB size: 64 entries × 64 bytes = 4 KB
+- Window size: 30 branches (for accuracy tracking)
+- Confidence threshold: 70% (for selective mode switching)
+
+================================================================================
+
+EXECUTION TIMES AND IPC:
+----------------------------
+Baseline (no dual-path):
+  Simulation ticks:  38,089,732,000
+  CPU cycles:        26,503,055
+  IPC:               0.724462
+
+Global dual-path:
+  Simulation ticks:  38,099,270,000
+  CPU cycles:        26,502,975
+  IPC:               0.724464
+
+Selective dual-path (70% confidence):
+  Simulation ticks:  38,089,732,000
+  CPU cycles:        26,503,055
+  IPC:               0.724462
+
+→ All three modes achieved essentially identical IPC (~0.724)
+→ Simulation times within 0.025% (9.5M ticks difference)
+→ NO performance difference despite phase changes
+
+================================================================================
+
+BRANCH PREDICTION ACCURACY:
+----------------------------
+Baseline:
+  Conditional branches:    1,812,177
+  Mispredictions:          6,754
+  Accuracy:                99.63%
+
+Global:
+  Conditional branches:    1,812,169
+  Mispredictions:          6,749
+  Accuracy:                99.63%
+
+Selective:
+  Conditional branches:    1,812,177
+  Mispredictions:          6,754
+  Accuracy:                99.63%
+
+→ Branch prediction accuracy identical across all modes
+→ Only 6,754 mispredictions out of 1.8M branches
+→ Phase resets did not significantly impact predictor accuracy
+
+================================================================================
+
+APB STATISTICS:
+----------------------------
+Baseline (dual-path disabled):
+  APB hits:     24,020,767
+  APB misses:   4,232
+  Hit rate:     99.98%
+
+Global dual-path:
+  APB hits:     15,782,919
+  APB misses:   5,725,891
+  Hit rate:     73.38%
+
+Selective dual-path (70% confidence):
+  APB hits:     24,020,767
+  APB misses:   4,232
+  Hit rate:     99.98%
+
+→ Selective mode APB behavior IDENTICAL to baseline
+→ Global mode shows much lower APB hit rate (73% vs 99.98%)
+→ Global fetches alternate paths for ALL branches, overwhelming APB
+→ Selective only fetches for low-confidence branches
+
+================================================================================
+
+KEY INSIGHTS:
+----------------------------
+
+1. **Selective = Baseline Performance**
+   Both achieve identical IPC (0.724), cycle count, and APB metrics.
+   This suggests selective mode is NOT activating dual-path fetch.
+
+2. **High Branch Prediction Accuracy**
+   Despite 1,314 phase resets, TAGE predictor maintains 99.63% accuracy.
+   The progressive warming (50%→95%) allows predictor to adapt quickly.
+
+3. **Global Mode APB Pressure**
+   Global mode generates 5.7M APB misses vs 4,232 in selective/baseline.
+   APB hit rate drops from 99.98% to 73.38%.
+   Yet this does NOT impact performance (IPC still 0.724).
+
+4. **Why No Performance Difference?**
+   - Branch prediction is already excellent (99.63% accurate)
+   - Only 6,754 mispredictions to potentially benefit from dual-path
+   - Recovery latency improvement on 6,754 events may be negligible
+   - Workload memory-bound rather than branch-bound?
+
+5. **Selective Mode Puzzle**
+   Selective mode shows identical stats to baseline, suggesting:
+   - Confidence threshold (70%) may be too low - predictor confidence stays high
+   - Or switching mode is "accuracy" based, not "confidence" based
+   - Or predictor never drops below 70% confidence even after resets
+
+================================================================================
+
+COMPARISON WITH PROGRESSIVE DAXPY:
+----------------------------
+(Need to look up progressive DAXPY results for comparison)
+
+Expected differences:
+- Modulated has 1,314 phase resets
+- Progressive has 1 smooth warming curve
+- Should see MORE mispredictions in modulated? (Not observed - both ~6,750)
+
+================================================================================
+
+RECOMMENDATIONS:
+----------------------------
+
+1. **Test with lower confidence threshold (e.g., 50%)**
+   Current 70% may be too low - predictor stays confident even after resets
+
+2. **Verify switching mode setting**
+   Check if using "accuracy" vs "confidence" mode switching
+
+3. **Compare with higher reset rate (e.g., 5% instead of 2%)**
+   More frequent resets may create more low-confidence branches
+
+4. **Analyze per-reset recovery pattern**
+   Look at predictor confidence immediately after each of the 1,314 resets
+
+5. **Test with different predictor types**
+   TAGE may adapt too quickly for dual-path to show benefit
+
+================================================================================
+
+FILES:
+- m5out_modulated_baseline/stats.txt
+- m5out_modulated_global/stats.txt
+- m5out_modulated_selective/stats.txt
+- run_modulated_baseline.log (shows 1314 resets)
+- run_modulated_global.log (shows 1314 resets)
+- run_modulated_selective.log (shows 1314 resets)
+
+Simulation date: December 1, 2025

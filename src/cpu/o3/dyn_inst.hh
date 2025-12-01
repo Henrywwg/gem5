@@ -325,6 +325,9 @@ class DynInst : public ExecContext, public RefCounted
     /** Predicted PC state after this instruction. */
     std::unique_ptr<PCStateBase> predPC;
 
+    /** Branch prediction confidence (0.0 to 1.0) */
+    double branchPredConfidence = 0.5;
+
     /** The Macroop if one exists */
     const StaticInstPtr macroop;
 
@@ -524,6 +527,18 @@ class DynInst : public ExecContext, public RefCounted
     setPredTaken(bool predicted_taken)
     {
         instFlags[PredTaken] = predicted_taken;
+    }
+
+    /** Set the branch prediction confidence. */
+    void setBranchPredConfidence(double confidence)
+    {
+        branchPredConfidence = confidence;
+    }
+
+    /** Get the branch prediction confidence. */
+    double getBranchPredConfidence() const
+    {
+        return branchPredConfidence;
     }
 
     /** Returns whether the instruction mispredicted. */

@@ -722,6 +722,36 @@ TAGEBase::restoreHistState(ThreadID tid, BranchInfo* bi)
     bi->modified = false;
 }
 
+double
+TAGEBase::getConfidence(BranchInfo* bi) const
+{
+    if (bi->hitBank > 0) {
+        // For TAGE table hits: use counter saturation
+        // Counter ranges from 0 to (2^bits - 1), typically 0-7 for 3-bit
+        int ctr = gtable[bi->hitBank][bi->hitBankIndex].ctr;
+        int maxCtr = (1 << tagTableCounterBits) - 1;
+
+        // Map counter value to confidence [0.0, 1.0]
+        // Strong values (0-1 or 6-7 for 3-bit) give high confidence
+        // Weak values (3-4) give low confidence
+        double normalized = abs(2 * ctr - maxCtr) / (double)maxCtr;
+        return normalized;  // 0.0 (weak) to 1.0 (strong)
+    } else {
+        // For bimodal predictor: use hysteresis pattern
+        // 00 = strongly not-taken, 01 = weakly not-taken
+        // 10 = weakly taken, 11 = strongly taken
+        int bim = (btablePrediction[bi->bimodalIndex] << 1) +
+                  btableHysteresis[bi->bimodalIndex >> logRatioBiModalHystEntries];
+
+        // Map to confidence: 00→0.9, 01→0.3, 10→0.3, 11→0.9
+        if (bim == 0 || bim == 3) {
+            return 0.9;  // Strong prediction
+        } else {
+            return 0.3;  // Weak prediction
+        }
+    }
+}
+
 int
 TAGEBase::calcNewPathHist(ThreadID tid, Addr pc, int cur_phist, bool taken,
                           int brtype, Addr target) const

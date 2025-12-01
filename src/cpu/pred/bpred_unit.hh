@@ -129,6 +129,30 @@ class BPredUnit : public SimObject
     void squash(const InstSeqNum &squashed_sn, const PCStateBase &corr_target,
                 bool actually_taken, ThreadID tid, bool from_commit=true);
 
+    /**
+     * Get confidence value for a prediction (0.0 to 1.0).
+     * Default implementation returns neutral confidence.
+     * @param bp_history Pointer to branch predictor state.
+     * @return Confidence value between 0.0 and 1.0.
+     */
+    virtual double getConfidence(void *bp_history) const
+    {
+        return 0.5;  // Neutral confidence for simple predictors
+    }
+
+    /**
+     * Get confidence for the most recent prediction (last in queue).
+     * @param tid The thread id.
+     * @return Confidence value between 0.0 and 1.0.
+     */
+    double getLastPredictionConfidence(ThreadID tid) const
+    {
+        if (!predHist[tid].empty()) {
+            return getConfidence(predHist[tid].back()->bpHistory);
+        }
+        return 0.5;
+    }
+
   protected:
 
     /** *******************************************************
