@@ -33,5 +33,5 @@ class APB(SimObject):
     cxx_header = "cpu/o3/apb.hh"
     cxx_class = "gem5::APB"
 
-    num_entries = Param.Unsigned(64, "Number of APB entries")
+    num_entries = Param.Unsigned(16, "Number of APB entries (10% of I-cache)")
     line_size = Param.Unsigned(64, "Line size in bytes")

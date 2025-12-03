@@ -207,6 +207,7 @@ class Fetch
         IcacheWaitResponse,
         IcacheWaitRetry,
         IcacheAccessComplete,
+        ApbWait,  // Waiting for APB read to complete
         NoGoodAddr
     };
 
@@ -443,8 +444,59 @@ class Fetch
     // Track alternate path requests awaiting translation (vaddr -> branch PC)
     std::unordered_map<Addr, std::pair<Addr, ThreadID>> altPathTranslations;
 
+    /**
+     * Track alternate path addresses that have been fetched before.
+     * Used for bypass-then-promote policy:
+     * - First fetch: bypass I-cache fill (set NO_CACHE_FILL)
+     * - Second fetch (APB miss): allow I-cache fill (don't set flag)
+     * This filters out "noise" and only caches proven useful alternates.
+     */
+    std::unordered_set<Addr> previouslyFetchedAlternates;
+
+    /**
+     * Track alternate paths that were skipped because they were in I-cache.
+     * Used to detect race condition: path was in I-cache at insert time but
+     * got evicted before recovery. If we see a miss for an address in this
+     * set, we know the race condition occurred.
+     */
+    std::unordered_set<Addr> skippedBecauseInIcache;
+
+    /**
+     * Track recently fetched addresses to approximate I-cache contents.
+     * Used to determine if an alternate path is likely already in I-cache.
+     */
+    std::unordered_set<Addr> recentlyFetchedAddrs;
+    std::deque<Addr> recentlyFetchedOrder;
+    static const size_t MAX_RECENT_ICACHE_TRACKING = 128;
+
+    /**
+     * Check if an address is currently in the I-cache using heuristic.
+     * Used to filter APB inserts: only insert if NOT in I-cache (hard cases).
+     */
+    bool isInIcache(Addr addr, ThreadID tid);
+
+    /** Whether I-cache filtering is enabled for APB inserts. */
+    bool icacheFilterEnabled;
+
+    /**
+     * Update the recently fetched set when a cache line is fetched.
+     */
+    void updateRecentlyFetched(Addr addr);
+
     // (optional) debug control
     bool debugAltFetch = true;
+
+    // Realistic hardware parameters
+    static const unsigned APB_READ_LATENCY_CYCLES = 3;  // Cycles to read from APB (realistic: tag lookup + data read)
+    static const unsigned MAX_OUTSTANDING_ALT_FETCHES = 4;  // MSHR-like limit
+    Tick apbWritePortBusyUntil = 0;  // Track APB write port contention
+    static const unsigned APB_WRITE_LATENCY_CYCLES = 2;  // Cycles to write to APB
+    
+    /** Track when APB read will be ready for each thread */
+    Tick apbReadyTick[MaxThreads];
+    
+    /** Track pending APB read address for each thread */
+    Addr pendingApbAddr[MaxThreads];
 
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;
@@ -657,6 +709,12 @@ class Fetch
         /** Number of cache lines fetched for alternate paths. */
         statistics::Scalar altPathCacheLines;
 
+        // Bypass-then-promote policy statistics
+        /** Number of alternate path fetches that bypassed I-cache (first fetch). */
+        statistics::Scalar altPathBypassedIcache;
+        /** Number of alternate path fetches that were promoted to I-cache (repeat fetch). */
+        statistics::Scalar altPathPromotedToIcache;
+
         // Deferred alternate path fetch statistics
         /** Number of alternate path fetches deferred due to cache blocked. */
         statistics::Scalar altPathFetchDeferred;
@@ -664,6 +722,14 @@ class Fetch
         statistics::Scalar altPathFetchDeferredProcessed;
         /** Number of deferred alternate path fetches dropped due to queue full. */
         statistics::Scalar altPathFetchDeferredDropped;
+
+        // Realistic hardware constraint statistics
+        /** Number of alternate path fetches dropped due to MSHR limit. */
+        statistics::Scalar altPathFetchMshrFull;
+        /** Number of times APB write port was busy (contention). */
+        statistics::Scalar apbWritePortContentions;
+        /** Total cycles stalled waiting for APB write port. */
+        statistics::Scalar apbWritePortStallCycles;
 
         // Branch misprediction recovery statistics
         /** Total cycles spent recovering from branch mispredictions. */
@@ -678,6 +744,20 @@ class Fetch
         statistics::Distribution apbHitRecoveryLatency;
         /** Distribution of recovery latency when APB misses. */
         statistics::Distribution apbMissRecoveryLatency;
+
+        // I-cache filtering statistics (only insert into APB if not in I-cache)
+        /** Number of alternate paths skipped because already in I-cache (easy cases). */
+        statistics::Scalar altPathSkippedInIcache;
+        /** Number of alternate paths inserted into APB (hard cases). */
+        statistics::Scalar altPathInsertedHardCase;
+        /** Race condition: path was in I-cache at insert, got evicted before recovery. */
+        statistics::Scalar altPathRaceConditionMisses;
+
+        // I-cache misses during misprediction recovery (baseline cost)
+        /** Number of I-cache accesses initiated during misprediction recovery. */
+        statistics::Scalar icacheAccessesDuringRecovery;
+        /** Number of I-cache misses that completed during misprediction recovery. */
+        statistics::Scalar icacheMissesDuringRecovery;
     } fetchStats;
 };
 

@@ -166,6 +166,9 @@ class Request : public Extensible<Request>
         PF_EXCLUSIVE                = 0x02000000,
         /** The request should be marked as LRU. */
         EVICT_NEXT                  = 0x04000000,
+        /** The request should bypass cache fill (fetch data but don't allocate).
+         *  Used by alternate path fetches for bypass-then-promote policy. */
+        NO_CACHE_FILL               = 0x08000000,
         /** The request should be marked with ACQUIRE. */
         ACQUIRE                     = 0x00020000,
         /** The request should be marked with RELEASE. */
@@ -1027,6 +1030,7 @@ class Request : public Extensible<Request>
         return (_flags.isSet(PREFETCH | PF_EXCLUSIVE));
     }
     bool isPrefetchEx() const { return _flags.isSet(PF_EXCLUSIVE); }
+    bool isNoCacheFill() const { return _flags.isSet(NO_CACHE_FILL); }
     bool isLLSC() const { return _flags.isSet(LLSC); }
     bool isPriv() const { return _flags.isSet(PRIVILEGED); }
     bool isLockedRMW() const { return _flags.isSet(LOCKED_RMW); }

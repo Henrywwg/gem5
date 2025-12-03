@@ -1,0 +1,646 @@
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/baseline/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,934
+  Instructions Per Cycle (IPC):  0.552919
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,746
+  Branch Mispredictions:         3,199
+  Branch Accuracy:               96.92%
+  Misprediction Rate:            3.08%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      N/A
+  Alternate Fetch Completed:     N/A
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     N/A
+  Fetch Completion Rate:         N/A
+  Switches to Dual-Path:         8,541
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             N/A
+  APB Recovery Misses:           2,305
+  APB Hit Rate (Coverage):       N/A
+  Total Recovery Cycles:         24,732,100
+  APB HIT Recovery Latency:      N/A
+  APB MISS Recovery Latency:     10729.8 cycles
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        0
+  Write Port Stall Cycles:       0
+  Avg Stall per Contention:      N/A
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              128,145
+  I-cache Misses:                2,085
+  I-cache Miss Rate:             1.63%
+  I-cache Hit Rate:              98.37%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,862 (13.05%) ███████
+   30-34%:      2,990 ( 1.96%) █
+   40-44%:        769 ( 0.51%) 
+   50-54%:        436 ( 0.29%) 
+   70-74%:        344 ( 0.23%) 
+   90-94%:     99,494 (65.36%) ████████████████████████████████████████
+     100%:        775 ( 0.51%) 
+    100+%:     27,544 (18.10%) ███████████
+
+  Total Predictions: 152,214
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb16_filter_on/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,934
+  Instructions Per Cycle (IPC):  0.552919
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,745
+  Branch Mispredictions:         3,201
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      54
+  Alternate Fetch Completed:     31
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.05%
+  Fetch Completion Rate:         57.41%
+  Switches to Dual-Path:         8,540
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             46
+  APB Recovery Misses:           2,254
+  Total Recovery Attempts:       2,300
+  APB Hit Rate (Coverage):       2.00%
+  Total Recovery Cycles:         24,573,100
+  APB HIT Recovery Latency:      2000.0 cycles
+  APB MISS Recovery Latency:     10861.2 cycles
+  APB Speedup:                   5.43x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       54
+  Alternate Paths USED:          46
+  Alternate Paths Wasted:        8
+  Utilization Rate:              85.19%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,201
+    ✅ APB Hit (fast recovery):      46 (1.4%)
+    ❌ APB Miss (slow recovery):     2,254 (70.4%)
+    ⚠️  Not attempted via APB:       901 (28.1%)
+
+  FETCH PERSPECTIVE (waste analysis):
+    ✅ Used (APB hit):               46 (85.2%)
+    ❌ Wasted (correct prediction):  ~0 (0.0%)
+    ❌ Wasted (other):               ~8 (14.8%)
+
+    • Correct prediction: Low-confidence branch predicted RIGHT
+    • Other waste: APB evicted or not dual-path misprediction
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        1
+  Write Port Stall Cycles:       0
+  Avg Stall per Contention:      N/A
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              128,108
+  I-cache Misses:                2,118
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,853 (13.04%) ███████
+   30-34%:      2,994 ( 1.97%) █
+   40-44%:        772 ( 0.51%) 
+   50-54%:        443 ( 0.29%) 
+   70-74%:        341 ( 0.22%) 
+   90-94%:     99,496 (65.37%) ████████████████████████████████████████
+     100%:        771 ( 0.51%) 
+    100+%:     27,546 (18.10%) ███████████
+
+  Total Predictions: 152,216
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb16_filter_off/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,938
+  Instructions Per Cycle (IPC):  0.552917
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,720
+  Branch Mispredictions:         3,201
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      821
+  Alternate Fetch Completed:     783
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.79%
+  Fetch Completion Rate:         95.37%
+  Switches to Dual-Path:         8,545
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             461
+  APB Recovery Misses:           1,835
+  Total Recovery Attempts:       2,296
+  APB Hit Rate (Coverage):       20.08%
+  Total Recovery Cycles:         24,638,102
+  APB HIT Recovery Latency:      2002.2 cycles
+  APB MISS Recovery Latency:     12923.8 cycles
+  APB Speedup:                   6.45x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       821
+  Alternate Paths USED:          461
+  Alternate Paths Wasted:        360
+  Utilization Rate:              56.15%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,201
+    ✅ APB Hit (fast recovery):      461 (14.4%)
+    ❌ APB Miss (slow recovery):     1,835 (57.3%)
+    ⚠️  Not attempted via APB:       905 (28.3%)
+
+  FETCH PERSPECTIVE (waste analysis):
+    ✅ Used (APB hit):               461 (56.2%)
+    ❌ Wasted (correct prediction):  ~0 (0.0%)
+    ❌ Wasted (other):               ~360 (43.8%)
+
+    • Correct prediction: Low-confidence branch predicted RIGHT
+    • Other waste: APB evicted or not dual-path misprediction
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        87
+  Write Port Stall Cycles:       61
+  Avg Stall per Contention:      0.70 cycles
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              128,295
+  I-cache Misses:                2,113
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,800 (13.01%) ███████
+   30-34%:      2,988 ( 1.96%) █
+   40-44%:        768 ( 0.50%) 
+   50-54%:        446 ( 0.29%) 
+   70-74%:        348 ( 0.23%) 
+   90-94%:     99,520 (65.38%) ████████████████████████████████████████
+     100%:        769 ( 0.51%) 
+    100+%:     27,577 (18.12%) ███████████
+
+  Total Predictions: 152,216
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb64_filter_on/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,934
+  Instructions Per Cycle (IPC):  0.552919
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,750
+  Branch Mispredictions:         3,201
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      54
+  Alternate Fetch Completed:     31
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.05%
+  Fetch Completion Rate:         57.41%
+  Switches to Dual-Path:         8,540
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             56
+  APB Recovery Misses:           2,244
+  Total Recovery Attempts:       2,300
+  APB Hit Rate (Coverage):       2.43%
+  Total Recovery Cycles:         24,569,600
+  APB HIT Recovery Latency:      2000.0 cycles
+  APB MISS Recovery Latency:     10899.1 cycles
+  APB Speedup:                   5.45x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       54
+  Alternate Paths USED:          56
+  Alternate Paths Wasted:        -2
+  Utilization Rate:              103.70%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,201
+    ✅ APB Hit (fast recovery):      56 (1.7%)
+    ❌ APB Miss (slow recovery):     2,244 (70.1%)
+    ⚠️  Not attempted via APB:       901 (28.1%)
+
+  REUSE FACTOR: 1.04x
+    → Each fetched alternate was reused 1.04 times on average
+    → Indicates spatial locality (same paths used for multiple mispredictions)
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        1
+  Write Port Stall Cycles:       0
+  Avg Stall per Contention:      N/A
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              128,095
+  I-cache Misses:                2,117
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,853 (13.04%) ███████
+   30-34%:      2,992 ( 1.97%) █
+   40-44%:        772 ( 0.51%) 
+   50-54%:        443 ( 0.29%) 
+   70-74%:        341 ( 0.22%) 
+   90-94%:     99,496 (65.37%) ████████████████████████████████████████
+     100%:        774 ( 0.51%) 
+    100+%:     27,545 (18.10%) ███████████
+
+  Total Predictions: 152,216
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb64_filter_off/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,235,853
+  Instructions Per Cycle (IPC):  0.552060
+  Simulation Time:               0.000618 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,718
+  Branch Mispredictions:         3,200
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      670
+  Alternate Fetch Completed:     641
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.65%
+  Fetch Completion Rate:         95.67%
+  Switches to Dual-Path:         8,544
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             692
+  APB Recovery Misses:           1,601
+  Total Recovery Attempts:       2,293
+  APB Hit Rate (Coverage):       30.18%
+  Total Recovery Cycles:         24,758,102
+  APB HIT Recovery Latency:      2002.2 cycles
+  APB MISS Recovery Latency:     14598.8 cycles
+  APB Speedup:                   7.29x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       670
+  Alternate Paths USED:          692
+  Alternate Paths Wasted:        -22
+  Utilization Rate:              103.28%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,200
+    ✅ APB Hit (fast recovery):      692 (21.6%)
+    ❌ APB Miss (slow recovery):     1,601 (50.0%)
+    ⚠️  Not attempted via APB:       907 (28.3%)
+
+  REUSE FACTOR: 1.03x
+    → Each fetched alternate was reused 1.03 times on average
+    → Indicates spatial locality (same paths used for multiple mispredictions)
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        56
+  Write Port Stall Cycles:       31
+  Avg Stall per Contention:      0.55 cycles
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              127,867
+  I-cache Misses:                2,111
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,828 (13.03%) ███████
+   30-34%:      2,976 ( 1.96%) █
+   40-44%:        770 ( 0.51%) 
+   50-54%:        446 ( 0.29%) 
+   70-74%:        341 ( 0.22%) 
+   90-94%:     99,533 (65.39%) ████████████████████████████████████████
+     100%:        764 ( 0.50%) 
+    100+%:     27,557 (18.10%) ███████████
+
+  Total Predictions: 152,215
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb256_filter_on/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,934
+  Instructions Per Cycle (IPC):  0.552919
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,750
+  Branch Mispredictions:         3,201
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      54
+  Alternate Fetch Completed:     31
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.05%
+  Fetch Completion Rate:         57.41%
+  Switches to Dual-Path:         8,540
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             56
+  APB Recovery Misses:           2,244
+  Total Recovery Attempts:       2,300
+  APB Hit Rate (Coverage):       2.43%
+  Total Recovery Cycles:         24,569,600
+  APB HIT Recovery Latency:      2000.0 cycles
+  APB MISS Recovery Latency:     10899.1 cycles
+  APB Speedup:                   5.45x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       54
+  Alternate Paths USED:          56
+  Alternate Paths Wasted:        -2
+  Utilization Rate:              103.70%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,201
+    ✅ APB Hit (fast recovery):      56 (1.7%)
+    ❌ APB Miss (slow recovery):     2,244 (70.1%)
+    ⚠️  Not attempted via APB:       901 (28.1%)
+
+  REUSE FACTOR: 1.04x
+    → Each fetched alternate was reused 1.04 times on average
+    → Indicates spatial locality (same paths used for multiple mispredictions)
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        1
+  Write Port Stall Cycles:       0
+  Avg Stall per Contention:      N/A
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              128,095
+  I-cache Misses:                2,117
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,853 (13.04%) ███████
+   30-34%:      2,992 ( 1.97%) █
+   40-44%:        772 ( 0.51%) 
+   50-54%:        443 ( 0.29%) 
+   70-74%:        341 ( 0.22%) 
+   90-94%:     99,496 (65.37%) ████████████████████████████████████████
+     100%:        774 ( 0.51%) 
+    100+%:     27,545 (18.10%) ███████████
+
+  Total Predictions: 152,216
+
+================================================================================
+
+
+
+================================================================================
+GEM5 DUAL-PATH PERFORMANCE METRICS
+Stats File: results/final_testing_matmul/apb256_filter_off/stats.txt
+================================================================================
+
+CORE PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+  Total CPU Cycles:              1,233,938
+  Instructions Per Cycle (IPC):  0.552917
+  Simulation Time:               0.000617 seconds
+  Total Instructions:            682,265
+
+BRANCH PREDICTION METRICS
+--------------------------------------------------------------------------------
+  Total Conditional Branches:    103,720
+  Branch Mispredictions:         3,205
+  Branch Accuracy:               96.91%
+  Misprediction Rate:            3.09%
+  Squashed Instructions:         N/A
+
+DUAL-PATH FETCHING METRICS
+--------------------------------------------------------------------------------
+  Alternate Fetch Requests:      606
+  Alternate Fetch Completed:     577
+  Alternate Fetch Squashed:      N/A
+  Dual-Path Activation Rate:     0.58%
+  Fetch Completion Rate:         95.21%
+  Switches to Dual-Path:         8,522
+
+APB RECOVERY METRICS
+--------------------------------------------------------------------------------
+  APB Recovery Hits:             844
+  APB Recovery Misses:           1,453
+  Total Recovery Attempts:       2,297
+  APB Hit Rate (Coverage):       36.74%
+  Total Recovery Cycles:         24,920,601
+  APB HIT Recovery Latency:      2002.4 cycles
+  APB MISS Recovery Latency:     15988.0 cycles
+  APB Speedup:                   7.98x faster with APB hit
+
+APB ALTERNATE PATH UTILIZATION
+--------------------------------------------------------------------------------
+  Alternate Paths Fetched:       606
+  Alternate Paths USED:          844
+  Alternate Paths Wasted:        -238
+  Utilization Rate:              139.27%
+
+
+  RECOVERY PERSPECTIVE (of all mispredictions):
+    Total Mispredictions:            3,205
+    ✅ APB Hit (fast recovery):      844 (26.3%)
+    ❌ APB Miss (slow recovery):     1,453 (45.3%)
+    ⚠️  Not attempted via APB:       908 (28.3%)
+
+  REUSE FACTOR: 1.39x
+    → Each fetched alternate was reused 1.39 times on average
+    → Indicates spatial locality (same paths used for multiple mispredictions)
+
+REALISTIC HARDWARE CONSTRAINT METRICS
+--------------------------------------------------------------------------------
+  MSHR Limit Drops:              0
+  MSHR Drop Rate:                N/A
+  Write Port Contentions:        45
+  Write Port Stall Cycles:       23
+  Avg Stall per Contention:      0.51 cycles
+
+CACHE METRICS
+--------------------------------------------------------------------------------
+  I-cache Accesses:              127,627
+  I-cache Misses:                2,100
+  I-cache Miss Rate:             1.65%
+  I-cache Hit Rate:              98.35%
+  L2 Accesses:                   N/A
+  L2 Misses:                     N/A
+  L2 Miss Rate:                  N/A
+  L2 Hit Rate:                   N/A
+
+CONFIDENCE LEVEL DISTRIBUTION
+--------------------------------------------------------------------------------
+   10-14%:     19,806 (13.01%) ███████
+   30-34%:      2,977 ( 1.96%) █
+   40-44%:        768 ( 0.50%) 
+   50-54%:        446 ( 0.29%) 
+   70-74%:        338 ( 0.22%) 
+   90-94%:     99,566 (65.41%) ████████████████████████████████████████
+     100%:        761 ( 0.50%) 
+    100+%:     27,558 (18.10%) ███████████
+
+  Total Predictions: 152,220
+
+================================================================================
+
+
+

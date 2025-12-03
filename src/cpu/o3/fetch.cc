@@ -74,6 +74,11 @@ namespace gem5
 namespace o3
 {
 
+// Define static const members for realistic hardware constraints
+const unsigned Fetch::APB_READ_LATENCY_CYCLES;
+const unsigned Fetch::MAX_OUTSTANDING_ALT_FETCHES;
+const unsigned Fetch::APB_WRITE_LATENCY_CYCLES;
+
 Fetch::IcachePort::IcachePort(Fetch *_fetch, CPU *_cpu) :
         RequestPort(_cpu->name() + ".icache_port"), fetch(_fetch)
 {}
@@ -131,9 +136,16 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         issuePipelinedIfetch[i] = false;
         squashStartTick[i] = 0;
         squashIsBranchMisp[i] = false;
+        apbReadyTick[i] = 0;
+        pendingApbAddr[i] = 0;
     }
 
     branchPred = params.branchPred;
+
+    // Initialize I-cache filter setting
+    icacheFilterEnabled = params.icacheFilterEnabled;
+    DPRINTF(Fetch, "I-cache filter for APB inserts: %s\n",
+            icacheFilterEnabled ? "enabled" : "disabled");
 
     for (ThreadID tid = 0; tid < numThreads; tid++) {
         decoder[tid] = params.decoder[tid];
@@ -207,12 +219,22 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
              "Number of alternate path fetches squashed"),
     ADD_STAT(altPathCacheLines, statistics::units::Count::get(),
              "Number of cache lines fetched for alternate paths"),
+    ADD_STAT(altPathBypassedIcache, statistics::units::Count::get(),
+             "Number of alternate path fetches that bypassed I-cache fill (first fetch)"),
+    ADD_STAT(altPathPromotedToIcache, statistics::units::Count::get(),
+             "Number of alternate path fetches promoted to I-cache (repeat fetch)"),
     ADD_STAT(altPathFetchDeferred, statistics::units::Count::get(),
              "Number of alternate path fetches deferred due to cache blocked"),
     ADD_STAT(altPathFetchDeferredProcessed, statistics::units::Count::get(),
              "Number of deferred alternate path fetches processed"),
     ADD_STAT(altPathFetchDeferredDropped, statistics::units::Count::get(),
              "Number of deferred alternate path fetches dropped (queue full)"),
+    ADD_STAT(altPathFetchMshrFull, statistics::units::Count::get(),
+             "Number of alternate path fetches dropped due to MSHR limit"),
+    ADD_STAT(apbWritePortContentions, statistics::units::Count::get(),
+             "Number of times APB write port was busy (contention)"),
+    ADD_STAT(apbWritePortStallCycles, statistics::units::Count::get(),
+             "Total cycles stalled waiting for APB write port"),
     ADD_STAT(branchMispredRecoveryCycles, statistics::units::Cycle::get(),
              "Total cycles spent recovering from branch mispredictions"),
     ADD_STAT(apbRecoveryHits, statistics::units::Count::get(),
@@ -224,7 +246,17 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
     ADD_STAT(apbHitRecoveryLatency, statistics::units::Cycle::get(),
              "Recovery latency when APB has correct path"),
     ADD_STAT(apbMissRecoveryLatency, statistics::units::Cycle::get(),
-             "Recovery latency when APB misses")
+             "Recovery latency when APB misses"),
+    ADD_STAT(altPathSkippedInIcache, statistics::units::Count::get(),
+             "Alternate paths skipped because already in I-cache (easy cases)"),
+    ADD_STAT(altPathInsertedHardCase, statistics::units::Count::get(),
+             "Alternate paths inserted into APB (hard cases - not in I-cache)"),
+    ADD_STAT(altPathRaceConditionMisses, statistics::units::Count::get(),
+             "Race condition: path was in I-cache at insert but evicted before recovery"),
+    ADD_STAT(icacheAccessesDuringRecovery, statistics::units::Count::get(),
+             "I-cache accesses initiated during misprediction recovery"),
+    ADD_STAT(icacheMissesDuringRecovery, statistics::units::Count::get(),
+             "I-cache misses that completed during misprediction recovery")
 {
         predictedBranches
             .prereq(predictedBranches);
@@ -394,6 +426,20 @@ Fetch::processCacheCompletion(PacketPtr pkt)
         ++fetchStats.altPathFetchCompleted;
         ++fetchStats.altPathCacheLines;
 
+        // REALISTIC HARDWARE: Model APB write port contention
+        Tick writeStartTick = curTick();
+        if (apbWritePortBusyUntil > curTick()) {
+            // APB write port is busy, must wait
+            Tick stallCycles = (apbWritePortBusyUntil - curTick()) / 1000;
+            writeStartTick = apbWritePortBusyUntil;
+            DPRINTF(Fetch, "[APB] Write port busy, delaying write by %d cycles\n",
+                    stallCycles);
+            ++fetchStats.apbWritePortContentions;
+            fetchStats.apbWritePortStallCycles += stallCycles;
+        }
+        // Reserve APB write port
+        apbWritePortBusyUntil = writeStartTick + (APB_WRITE_LATENCY_CYCLES * 1000);
+
         // Remove from tracking structures
         outstandingAltFetches.erase(it);
         altPathTranslations.erase(alignedPC);
@@ -415,6 +461,9 @@ Fetch::processCacheCompletion(PacketPtr pkt)
     memcpy(fetchBuffer[tid], pkt->getConstPtr<uint8_t>(), fetchBufferSize);
     fetchBufferValid[tid] = true;
 
+    // Update I-cache tracking (for filtering APB inserts)
+    updateRecentlyFetched(pkt->req->getVaddr());
+
     // Wake up the CPU (if it went to sleep and was waiting on
     // this completion event).
     cpu->wakeCPU();
@@ -428,9 +477,26 @@ Fetch::processCacheCompletion(PacketPtr pkt)
     if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {
         Tick recoveryTime = curTick() - squashStartTick[tid];
         ++fetchStats.apbRecoveryMisses;
+        ++fetchStats.icacheMissesDuringRecovery;  // This IS an I-cache miss during recovery
         fetchStats.apbMissRecoveryLatency.sample(recoveryTime);
         fetchStats.recoveryLatency.sample(recoveryTime);
         fetchStats.branchMispredRecoveryCycles += recoveryTime;
+        
+        // RACE CONDITION DETECTION: Check if we skipped this address
+        // because it was in I-cache at insert time, but now we had
+        // to fetch it from I-cache (meaning it was evicted and re-fetched)
+        Addr recoveryAddr = fetchBufferAlignPC(memReq[tid]->getVaddr());
+        if (skippedBecauseInIcache.find(recoveryAddr) != skippedBecauseInIcache.end()) {
+            // This address was skipped at insert time because it was in I-cache
+            // But now we're fetching it for recovery - means it got evicted!
+            ++fetchStats.altPathRaceConditionMisses;
+            DPRINTF(Fetch, "[tid:%i] RACE CONDITION DETECTED: addr %#x was in I-cache "
+                    "at insert time but got evicted before recovery. Latency: %d cycles\n",
+                    tid, recoveryAddr, recoveryTime);
+            // Remove from tracking set
+            skippedBecauseInIcache.erase(recoveryAddr);
+        }
+        
         DPRINTF(Fetch, "[tid:%i] APB miss for recovery. Latency: %d cycles\n",
                 tid, recoveryTime);
         squashStartTick[tid] = 0;
@@ -701,6 +767,50 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
     return true;
 }
 
+bool
+Fetch::isInIcache(Addr addr, ThreadID tid)
+{
+    // Check if the given address is currently in the I-cache.
+    // We use a heuristic based on recently fetched addresses.
+    // 
+    // In real hardware, this would be a tag-only cache probe (fast, 1 cycle).
+    // For simulation, we approximate by tracking what we've recently fetched.
+    
+    Addr alignedAddr = fetchBufferAlignPC(addr);
+    
+    // Check if it's in the current fetch buffer
+    if (fetchBufferValid[tid] && fetchBufferPC[tid] == alignedAddr) {
+        return true;
+    }
+    
+    // Check our recently fetched tracking set
+    if (recentlyFetchedAddrs.find(alignedAddr) != recentlyFetchedAddrs.end()) {
+        return true;
+    }
+    
+    // Not found in our approximation - consider it a potential hard case
+    return false;
+}
+
+void
+Fetch::updateRecentlyFetched(Addr addr)
+{
+    Addr alignedAddr = fetchBufferAlignPC(addr);
+    
+    // Add to set if not already present
+    if (recentlyFetchedAddrs.find(alignedAddr) == recentlyFetchedAddrs.end()) {
+        recentlyFetchedAddrs.insert(alignedAddr);
+        recentlyFetchedOrder.push_back(alignedAddr);
+        
+        // Evict oldest if too many (simulates cache capacity)
+        while (recentlyFetchedOrder.size() > MAX_RECENT_ICACHE_TRACKING) {
+            Addr oldest = recentlyFetchedOrder.front();
+            recentlyFetchedOrder.pop_front();
+            recentlyFetchedAddrs.erase(oldest);
+        }
+    }
+}
+
 void
 Fetch::fetchAlternatePath(Addr altVaddr, ThreadID tid, Addr branchPC)
 {
@@ -735,6 +845,15 @@ Fetch::fetchAlternatePath(Addr altVaddr, ThreadID tid, Addr branchPC)
         return;
     }
 
+    // REALISTIC HARDWARE: Limit outstanding alternate path fetches (MSHR-like)
+    if (outstandingAltFetches.size() >= MAX_OUTSTANDING_ALT_FETCHES) {
+        DPRINTF(Fetch, "[tid:%i] Dropping alternate path fetch for %#x "
+                "(outstanding fetch limit %d reached)\n",
+                tid, fetchBufferBlockPC, MAX_OUTSTANDING_ALT_FETCHES);
+        ++fetchStats.altPathFetchMshrFull;
+        return;
+    }
+
     // Check if this address is already in APB
     if (apb && apb->contains(fetchBufferBlockPC)) {
         DPRINTF(Fetch, "[tid:%i] Alternate path %#x already in APB\n",
@@ -742,14 +861,61 @@ Fetch::fetchAlternatePath(Addr altVaddr, ThreadID tid, Addr branchPC)
         return;
     }
 
-    DPRINTF(Fetch, "[tid:%i] Starting alternate path fetch for vaddr %#x (aligned: %#x)\n",
-            tid, altVaddr, fetchBufferBlockPC);
+    // I-CACHE FILTERING: Only insert into APB if NOT already in I-cache
+    // This is the key optimization: APB should only store "hard cases"
+    // (paths that would cause I-cache misses on recovery)
+    // Can be disabled via icacheFilterEnabled parameter
+    if (icacheFilterEnabled && isInIcache(fetchBufferBlockPC, tid)) {
+        // Path is already in I-cache - this is an "easy case"
+        // Don't waste APB entry on it; I-cache can serve it fast
+        ++fetchStats.altPathSkippedInIcache;
+        
+        // Track this address for race condition detection:
+        // If path gets evicted before recovery, we'll detect it
+        skippedBecauseInIcache.insert(fetchBufferBlockPC);
+        
+        DPRINTF(Fetch, "[tid:%i] Alternate path %#x already in I-cache, "
+                "skipping APB insert (easy case)\n",
+                tid, fetchBufferBlockPC);
+        return;
+    }
+    
+    // Path is NOT in I-cache - this is a "hard case"
+    // APB insertion is valuable here
+    ++fetchStats.altPathInsertedHardCase;
+    DPRINTF(Fetch, "[tid:%i] Alternate path %#x NOT in I-cache, "
+            "proceeding with APB prefetch (hard case)\n",
+            tid, fetchBufferBlockPC);
+
+    // Bypass-then-promote policy: check if this address was previously fetched
+    // - First fetch: Set NO_CACHE_FILL flag (bypass I-cache insertion)
+    // - Subsequent fetch (APB miss): Allow I-cache fill (don't set flag)
+    bool firstFetch = (previouslyFetchedAlternates.find(fetchBufferBlockPC) == 
+                       previouslyFetchedAlternates.end());
+    
+    DPRINTF(Fetch, "[tid:%i] Starting alternate path fetch for vaddr %#x (aligned: %#x) "
+            "[%s fetch - %s I-cache fill]\n",
+            tid, altVaddr, fetchBufferBlockPC,
+            firstFetch ? "first" : "repeat",
+            firstFetch ? "bypassing" : "allowing");
 
     // Create a memory request for the alternate path
     // Mark as PREFETCH so it doesn't interfere with normal MSHR state
+    Request::FlagsType flags = Request::INST_FETCH | Request::PREFETCH;
+    
+    // Bypass-then-promote: On first fetch, bypass I-cache fill
+    if (firstFetch) {
+        flags |= Request::NO_CACHE_FILL;
+        // Mark as previously fetched for next time
+        previouslyFetchedAlternates.insert(fetchBufferBlockPC);
+        ++fetchStats.altPathBypassedIcache;
+    } else {
+        ++fetchStats.altPathPromotedToIcache;
+    }
+    
     RequestPtr mem_req = std::make_shared<Request>(
         fetchBufferBlockPC, fetchBufferSize,
-        Request::INST_FETCH | Request::PREFETCH, cpu->instRequestorId(), branchPC,
+        flags, cpu->instRequestorId(), branchPC,
         cpu->thread[tid]->contextId());
 
     mem_req->taskId(cpu->taskId());
@@ -911,6 +1077,16 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
                     "response.\n", tid);
             lastIcacheStall[tid] = curTick();
             fetchStatus[tid] = IcacheWaitResponse;
+
+            // Track I-cache accesses during misprediction recovery
+            // This happens when we're recovering from a branch misprediction
+            // and need to fetch the correct path from I-cache
+            if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {
+                ++fetchStats.icacheAccessesDuringRecovery;
+                DPRINTF(Fetch, "[tid:%i] I-cache access during misprediction "
+                        "recovery at %#x\n", tid, fetchBufferBlockPC);
+            }
+
             // Notify Fetch Request probe when a packet containing a fetch
             // request is successfully sent
             ppFetchRequestSent->notify(mem_req);
@@ -984,6 +1160,11 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
         DPRINTF(Fetch, "[tid:%i] Squashing outstanding ITLB miss.\n",
                 tid);
         memReq[tid] = NULL;
+    } else if (fetchStatus[tid] == ApbWait) {
+        // Cancel pending APB read
+        DPRINTF(Fetch, "[tid:%i] Squashing outstanding APB read.\n", tid);
+        apbReadyTick[tid] = 0;
+        pendingApbAddr[tid] = 0;
     }
 
     // Get rid of the retrying packet if it was from this thread.
@@ -1010,6 +1191,19 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
             it = outstandingAltFetches.erase(it);
         } else {
             ++it;
+        }
+    }
+
+    // Limit size of skippedBecauseInIcache to prevent unbounded growth
+    // Keep only the most recent entries (rough LRU by clearing half when too large)
+    const size_t MAX_SKIPPED_TRACKING = 256;
+    if (skippedBecauseInIcache.size() > MAX_SKIPPED_TRACKING) {
+        // Clear oldest half - this is approximate but sufficient for tracking
+        size_t toRemove = skippedBecauseInIcache.size() / 2;
+        auto it = skippedBecauseInIcache.begin();
+        while (toRemove > 0 && it != skippedBecauseInIcache.end()) {
+            it = skippedBecauseInIcache.erase(it);
+            --toRemove;
         }
     }
 
@@ -1057,7 +1251,8 @@ Fetch::updateFetchStatus()
     for (ThreadID tid : *activeThreads) {
         if (fetchStatus[tid] == Running ||
             fetchStatus[tid] == Squashing ||
-            fetchStatus[tid] == IcacheAccessComplete) {
+            fetchStatus[tid] == IcacheAccessComplete ||
+            fetchStatus[tid] == ApbWait) {
 
             if (_status == Inactive) {
                 DPRINTF(Activity, "[tid:%i] Activating stage.\n",tid);
@@ -1279,6 +1474,7 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
         fetchStatus[tid] != IcacheWaitResponse &&
         fetchStatus[tid] != IcacheWaitRetry &&
         fetchStatus[tid] != ItlbWait &&
+        fetchStatus[tid] != ApbWait &&
         fetchStatus[tid] != QuiescePending) {
         DPRINTF(Fetch, "[tid:%i] Setting to blocked\n",tid);
 
@@ -1472,42 +1668,66 @@ Fetch::fetch(bool &status_change)
 
         fetchStatus[tid] = Running;
         status_change = true;
-    } else if (fetchStatus[tid] == Running) {
-        // Align the fetch PC so its at the start of a fetch buffer segment.
-        Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
-        // --- Check APB first ---
-        if (apb && apb->contains(fetchAddr)) {
-            const uint8_t* line = apb->readLine(fetchAddr);
-            if (line) {  // <-- add this check
+    } else if (fetchStatus[tid] == ApbWait) {
+        // Waiting for APB read to complete
+        if (curTick() >= apbReadyTick[tid]) {
+            // APB read is complete
+            Addr apbAddr = pendingApbAddr[tid];
+            const uint8_t* line = apb->readLine(apbAddr);
+            if (line) {
                 std::memcpy(fetchBuffer[tid], line, fetchBufferSize);
-                fetchBufferPC[tid] = fetchBufferAlignPC(fetchAddr);
+                fetchBufferPC[tid] = fetchBufferAlignPC(apbAddr);
                 fetchBufferValid[tid] = true;
                 fetchStatus[tid] = Running;
                 status_change = true;
 
                 // Track APB-assisted recovery
                 if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {
+                    // Measure recovery time: includes APB read latency
                     Tick recoveryTime = curTick() - squashStartTick[tid];
                     ++fetchStats.apbRecoveryHits;
                     fetchStats.apbHitRecoveryLatency.sample(recoveryTime);
                     fetchStats.recoveryLatency.sample(recoveryTime);
                     fetchStats.branchMispredRecoveryCycles += recoveryTime;
-                    DPRINTF(Fetch, "[tid:%i] APB hit for recovery! Latency: %d cycles\n",
-                            tid, recoveryTime);
+                    DPRINTF(Fetch, "[tid:%i] APB hit for recovery! Latency: %d ticks (%d cycles)\n",
+                            tid, recoveryTime, recoveryTime / 500);
                     squashStartTick[tid] = 0;
                     squashIsBranchMisp[tid] = false;
                 }
             } else {
-                // APB miss: fall back to L1I
-                DPRINTF(Fetch, "[tid:%i] APB miss for PC %s, falling back to I-cache\n", tid, this_pc);
+                // APB miss after wait (shouldn't happen, but fall back to I-cache)
+                DPRINTF(Fetch, "[tid:%i] APB read returned null, falling back to I-cache\n", tid);
+                fetchStatus[tid] = Running;
             }
+        } else {
+            // Still waiting for APB read
+            ++fetchStats.miscStallCycles;
+            return;
         }
+    } else if (fetchStatus[tid] == Running) {
+        // Align the fetch PC so its at the start of a fetch buffer segment.
+        Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
+        
         // If buffer is no longer valid or fetchAddr has moved to point
         // to the next cache block, AND we have no remaining ucode
-        // from a macro-op, then start fetch from icache.
-        else if (!(fetchBufferValid[tid] &&
+        // from a macro-op, then need to fetch from APB or icache.
+        if (!(fetchBufferValid[tid] &&
                     fetchBufferBlockPC == fetchBufferPC[tid]) && !inRom &&
                 !macroop[tid]) {
+            // --- Check APB first (with realistic latency) ---
+            if (apb && apb->contains(fetchAddr)) {
+                // APB hit: start the read with realistic latency
+                pendingApbAddr[tid] = fetchAddr;
+                // Model APB read latency: tag lookup + data read
+                Tick clockPeriod = cpu->clockPeriod();
+                apbReadyTick[tid] = curTick() + (APB_READ_LATENCY_CYCLES * clockPeriod);
+                fetchStatus[tid] = ApbWait;
+                DPRINTF(Fetch, "[tid:%i] APB hit for 0x%x, waiting %d cycles for data\n",
+                        tid, fetchAddr, APB_READ_LATENCY_CYCLES);
+                ++fetchStats.miscStallCycles;
+                return;
+            }
+            // APB miss or no APB - fall through to I-cache
             DPRINTF(Fetch, "[tid:%i] Attempting to translate and read "
                     "instruction, starting at PC %s.\n", tid, this_pc);
 
@@ -1789,6 +2009,7 @@ Fetch::getFetchingThread()
 
         if (fetchStatus[tid] == Running ||
             fetchStatus[tid] == IcacheAccessComplete ||
+            fetchStatus[tid] == ApbWait ||
             fetchStatus[tid] == Idle) {
             return tid;
         } else {
@@ -1812,6 +2033,7 @@ Fetch::roundRobin()
         assert(high_pri <= numThreads);
 
         if (fetchStatus[high_pri] == Running ||
+            fetchStatus[high_pri] == ApbWait ||
             fetchStatus[high_pri] == IcacheAccessComplete ||
             fetchStatus[high_pri] == Idle) {
 

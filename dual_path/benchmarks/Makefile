@@ -14,7 +14,7 @@ CXXFLAGS = -std=c++20 -O3
 OUT_DIR = bin
 
 # Targets
-TARGETS = daxpy_baseline daxpy_progressive daxpy_random
+TARGETS = daxpy_baseline daxpy_progressive daxpy_random matmul_conditional binary_search
 
 # Default: build all
 all: $(OUT_DIR) $(TARGETS)
@@ -44,30 +44,42 @@ $(OUT_DIR)/daxpy_random: daxpy_random.cpp
 	$(CXX) $(CXXFLAGS) -I$(M5_INCLUDE) -o $@ $< $(M5_LIB)
 	@echo "Built: $@ (Random - consistently unpredictable)"
 
+# Matrix Multiplication with Conditional Logic (realistic workload)
+matmul_conditional: $(OUT_DIR)/matmul_conditional
+
+$(OUT_DIR)/matmul_conditional: matmul_conditional.cpp
+	$(CXX) $(CXXFLAGS) -I$(M5_INCLUDE) -o $@ $< $(M5_LIB)
+	@echo "Built: $@ (Matrix Mult - data-dependent branches)"
+
+# Binary Search (data-dependent algorithm)
+binary_search: $(OUT_DIR)/binary_search
+
+$(OUT_DIR)/binary_search: binary_search.cpp
+	$(CXX) $(CXXFLAGS) -I$(M5_INCLUDE) -o $@ $< $(M5_LIB)
+	@echo "Built: $@ (Binary Search - varying branch patterns)"
+
 # Clean
 clean:
 	rm -rf $(OUT_DIR)
 
 # Help
 help:
-	@echo "DAXPY Evaluation Benchmarks"
-	@echo "============================"
+	@echo "Dual-Path Execution Evaluation Benchmarks"
+	@echo "=========================================="
 	@echo ""
 	@echo "Targets:"
-	@echo "  all              - Build all benchmarks (default)"
-	@echo "  daxpy_baseline   - Baseline DAXPY (predictable)"
-	@echo "  daxpy_progressive- Progressive DAXPY (warming up) - KEY TEST!"
-	@echo "  daxpy_random     - Random DAXPY (worst case)"
-	@echo "  clean            - Remove all binaries"
+	@echo "  all                - Build all benchmarks (default)"
+	@echo "  daxpy_progressive  - Progressive DAXPY (warming up) - KEY TEST!"
+	@echo "  matmul_conditional - Matrix Multiplication (realistic workload)"
+	@echo "  clean              - Remove all binaries"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make               # Build all"
+	@echo "  make                    # Build all"
 	@echo "  make daxpy_progressive  # Build only progressive"
-	@echo "  make clean         # Clean up"
+	@echo "  make clean              # Clean up"
 	@echo ""
 	@echo "Running in gem5:"
-	@echo "  ./evaluation/quick_eval.sh evaluation/benchmarks/bin/daxpy_baseline"
-	@echo "  ./evaluation/quick_eval.sh evaluation/benchmarks/bin/daxpy_progressive"
-	@echo "  ./evaluation/quick_eval.sh evaluation/benchmarks/bin/daxpy_random"
+	@echo "  ./dual_path/scripts/run_tests.sh daxpy_progressive"
+	@echo "  ./dual_path/scripts/run_tests.sh matmul_conditional"
 
-.PHONY: all clean help daxpy_baseline daxpy_progressive daxpy_random
+.PHONY: all clean help daxpy_baseline daxpy_progressive daxpy_random matmul_conditional binary_search

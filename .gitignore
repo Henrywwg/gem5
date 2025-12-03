@@ -36,3 +36,17 @@ configs/dram/lowp_sweep.cfg
 .vscode
 typings
 .DS_Store
+
+# Dual-path archive (local backup, don't commit)
+dual_path_archive_*/
+
+# IDE settings
+.vscode/
+
+# Results directories (regeneratable)
+/results/
+
+
+# Large stats files (regeneratable from simulations)
+dual_path/results/final_testing*/*/stats.txt
+

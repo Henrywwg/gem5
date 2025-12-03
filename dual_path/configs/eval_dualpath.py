@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Baseline Evaluation Configuration for Dual-Path Execution Project
-Standard O3CPU without dual-path execution for comparison
+Dual-Path Evaluation Configuration
+O3CPU with APB and dual-path execution enabled
 """
 
 import argparse
@@ -16,22 +16,15 @@ from common import SimpleOpts
 
 # Parse arguments
 parser = argparse.ArgumentParser(
-    description="Baseline O3CPU evaluation configuration"
+    description="Dual-path O3CPU evaluation configuration"
 )
 parser.add_argument(
     "--binary", type=str, required=True, help="Binary to execute"
 )
 parser.add_argument(
-    "--cpu-type",
-    type=str,
-    default="X86O3CPU",
-    choices=["X86O3CPU", "X86MinorCPU"],
-    help="CPU type to use",
-)
-parser.add_argument(
     "--outdir",
     type=str,
-    default="m5out_baseline",
+    default="m5out_dualpath",
     help="Output directory for simulation results",
 )
 parser.add_argument(
@@ -48,6 +41,76 @@ parser.add_argument(
 )
 parser.add_argument(
     "--l2-size", type=str, default="256kB", help="L2 cache size"
+)
+
+# Dual-path specific parameters
+parser.add_argument(
+    "--apb-entries", type=int, default=16, help="Number of APB entries"
+)
+parser.add_argument(
+    "--apb-line-size", type=int, default=64, help="APB line size in bytes"
+)
+parser.add_argument(
+    "--initial-dual-path",
+    action="store_true",
+    default=True,
+    help="Start in dual-path mode (default: True)",
+)
+parser.add_argument(
+    "--no-initial-dual-path",
+    action="store_false",
+    dest="initial_dual_path",
+    help="Start in single-path mode",
+)
+parser.add_argument(
+    "--window-size",
+    type=int,
+    default=100,
+    help="Branch history window size for confidence estimation",
+)
+parser.add_argument(
+    "--high-threshold",
+    type=int,
+    default=85,
+    help="Accuracy threshold to switch from dual to single-path (%)",
+)
+parser.add_argument(
+    "--low-threshold",
+    type=int,
+    default=70,
+    help="Accuracy threshold to switch from single to dual-path (%)",
+)
+parser.add_argument(
+    "--fetch-policy",
+    type=str,
+    default="global",
+    choices=["global", "selective"],
+    help="Fetch policy: 'global' (all branches) or 'selective' (low-confidence only)",
+)
+parser.add_argument(
+    "--confidence-threshold",
+    type=int,
+    default=70,
+    help="Confidence threshold for selective fetch policy (%)",
+)
+parser.add_argument(
+    "--icache-filter",
+    action="store_true",
+    default=True,
+    help="Enable I-cache filtering for APB inserts (default: True)",
+)
+parser.add_argument(
+    "--no-icache-filter",
+    action="store_false",
+    dest="icache_filter",
+    help="Disable I-cache filtering (insert all alternate paths into APB)",
+)
+parser.add_argument(
+    "--switching-mode",
+    type=str,
+    default="accuracy",
+    choices=["accuracy", "confidence"],
+    help="Switching mode: 'accuracy' (historical accuracy) or 'confidence' (predictor confidence)",
 )
 parser.add_argument(
     "--stats-interval",
@@ -126,10 +189,29 @@ system.mem_mode = "timing"
 system.mem_ranges = [AddrRange(args.mem_size)]
 
 # CPU
-if args.cpu_type == "X86O3CPU":
-    system.cpu = X86O3CPU()
-elif args.cpu_type == "X86MinorCPU":
-    system.cpu = X86MinorCPU()
+system.cpu = X86O3CPU()
+
+# Configure TAGE branch predictor for confidence estimation
+system.cpu.branchPred = TAGE()
+
+# Create and attach APB
+system.cpu.apb = APB(
+    num_entries=args.apb_entries, line_size=args.apb_line_size
+)
+
+# Configure I-cache filtering for APB inserts
+system.cpu.icacheFilterEnabled = args.icache_filter
+
+# Create and attach DualPathSwitcher
+system.cpu.dualPathSwitcher = DualPathSwitcher(
+    window_size=args.window_size,
+    high_threshold=args.high_threshold,
+    low_threshold=args.low_threshold,
+    initial_dual_path=args.initial_dual_path,
+    fetch_policy=args.fetch_policy,
+    confidence_threshold=args.confidence_threshold,
+    switching_mode=args.switching_mode,
+)
 
 # Create cache hierarchy
 system.cpu.icache = L1ICache()
@@ -180,9 +262,9 @@ m5.instantiate()
 
 # Print configuration
 print("=" * 70)
-print("BASELINE EVALUATION CONFIGURATION")
+print("DUAL-PATH EVALUATION CONFIGURATION")
 print("=" * 70)
-print(f"CPU Type:              {args.cpu_type}")
+print(f"CPU Type:              X86O3CPU")
 print(f"Clock Frequency:       {args.clock}")
 print(f"Memory Size:           {args.mem_size}")
 print(f"L1I Cache Size:        {args.l1i_size}")
@@ -191,7 +273,21 @@ print(f"L2 Cache Size:         {args.l2_size}")
 print(f"Binary:                {args.binary}")
 print(f"Output Directory:      {args.outdir}")
 print(f"Stats Interval:        {args.stats_interval} ticks")
-print(f"Dual-Path Execution:   DISABLED (Baseline)")
+print("-" * 70)
+print("DUAL-PATH CONFIGURATION:")
+print(f"  APB Entries:         {args.apb_entries}")
+print(f"  APB Line Size:       {args.apb_line_size} bytes")
+print(f"  I-cache Filter:      {'Enabled' if args.icache_filter else 'Disabled'}")
+print(
+    f"  Initial Mode:        {'Dual-Path' if args.initial_dual_path else 'Single-Path'}"
+)
+print(f"  Switching Mode:      {args.switching_mode}")
+print(f"  Fetch Policy:        {args.fetch_policy}")
+if args.fetch_policy == "selective":
+    print(f"  Confidence Threshold: {args.confidence_threshold}%")
+print(f"  Window Size:         {args.window_size} branches")
+print(f"  High Threshold:      {args.high_threshold}% (switch to single-path)")
+print(f"  Low Threshold:       {args.low_threshold}% (switch to dual-path)")
 print("=" * 70)
 
 # Run simulation
@@ -208,6 +304,9 @@ if args.stats_interval > 0:
         m5.stats.reset()
         exit_event = m5.simulate(interval)
         dump_count += 1
+
+# Always dump final stats at end of simulation
+m5.stats.dump()
 
 print(f"\nExiting @ tick {m5.curTick()} because {exit_event.getCause()}")
 print("=" * 70)

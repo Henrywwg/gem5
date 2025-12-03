@@ -210,6 +210,10 @@ class BaseO3CPU(BaseCPU):
 
     apb = Param.APB(NULL, "Alternate Path Buffer")
 
+    icacheFilterEnabled = Param.Bool(
+        True, "Enable I-cache filtering for APB inserts (skip easy cases)"
+    )
+
     dualPathSwitcher = Param.DualPathSwitcher(
         NULL, "Dual-Path Execution Switcher"
     )

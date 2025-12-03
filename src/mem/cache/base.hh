@@ -455,6 +455,22 @@ class BaseCache : public ClockedObject
     }
 
     /**
+     * Determine whether to allocate on fill, considering both
+     * the command and request flags (e.g., NO_CACHE_FILL).
+     *
+     * @param pkt Packet with command and request flags
+     * @return Whether we should allocate on the fill
+     */
+    inline bool allocOnFill(PacketPtr pkt) const
+    {
+        // Check NO_CACHE_FILL flag first - bypass-then-promote policy
+        if (pkt->req->isNoCacheFill()) {
+            return false;
+        }
+        return allocOnFill(pkt->cmd);
+    }
+
+    /**
      * Regenerate block address using tags.
      * Block address regeneration depends on whether we're using a temporary
      * block or not.
@@ -1180,7 +1196,7 @@ class BaseCache : public ClockedObject
     {
         MSHR *mshr = mshrQueue.allocate(pkt->getBlockAddr(blkSize), blkSize,
                                         pkt, time, order++,
-                                        allocOnFill(pkt->cmd));
+                                        allocOnFill(pkt));  // Use packet overload
 
         if (mshrQueue.isFull()) {
             setBlocked((BlockedCause)MSHRQueue_MSHRs);
