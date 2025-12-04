@@ -322,6 +322,8 @@ Decode::squash(const DynInstPtr &inst, ThreadID tid)
     toFetch->decodeInfo[tid].squashInst = inst;
 
     InstSeqNum squash_seq_num = inst->seqNum;
+    uint8_t wrong_pid   = inst->getPathId();
+    uint32_t wrong_epoch = inst->getPathEpoch();
 
     // Might have to tell fetch to unblock.
     if (decodeStatus[tid] == Blocked ||
@@ -332,21 +334,39 @@ Decode::squash(const DynInstPtr &inst, ThreadID tid)
     // Set status to squashing.
     decodeStatus[tid] = Squashing;
 
+    // Selectively squash younger wrong-path instructions from fetch queue
     for (int i=0; i<fromFetch->size; i++) {
-        if (fromFetch->insts[i]->threadNumber == tid &&
-            fromFetch->insts[i]->seqNum > squash_seq_num) {
-            fromFetch->insts[i]->setSquashed();
+        auto f_inst = fromFetch->insts[i];
+        if (f_inst->threadNumber == tid &&
+            f_inst->seqNum > squash_seq_num &&
+            f_inst->getPathId() == wrong_pid &&
+            f_inst->getPathEpoch() == wrong_epoch) {
+            f_inst->setSquashed();
         }
     }
 
     // Clear the instruction list and skid buffer in case they have any
-    // insts in them.
+    // wrong-path insts in them.
     while (!insts[tid].empty()) {
-        insts[tid].pop();
+        auto di = insts[tid].front();
+        if (di->seqNum > squash_seq_num &&
+            di->getPathId() == wrong_pid &&
+            di->getPathEpoch() == wrong_epoch) {
+            insts[tid].pop();
+        } else {
+            break; // older/correct-path instructions remain
+        }
     }
 
     while (!skidBuffer[tid].empty()) {
-        skidBuffer[tid].pop();
+        auto di = skidBuffer[tid].front();
+        if (di->seqNum > squash_seq_num &&
+            di->getPathId() == wrong_pid &&
+            di->getPathEpoch() == wrong_epoch) {
+            skidBuffer[tid].pop();
+        } else {
+            break;
+        }
     }
 
     // Squash instructions up until this one

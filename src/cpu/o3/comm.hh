@@ -99,6 +99,10 @@ struct IEWStruct
     bool branchMispredict[MaxThreads];
     bool branchTaken[MaxThreads];
     bool includeSquashInst[MaxThreads];
+
+    // NEW: selective squash cohort identity
+    uint8_t squashPathId[MaxThreads];
+    uint32_t squashPathEpoch[MaxThreads];
 };
 
 struct IssueStruct

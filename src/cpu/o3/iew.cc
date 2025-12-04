@@ -442,7 +442,8 @@ IEW::squash(ThreadID tid)
 }
 
 void
-IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
+IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid,
+                       uint8_t pid, uint32_t epoch)
 {
     DPRINTF(IEW, "[tid:%i] [sn:%llu] Squashing from a specific instruction,"
             " PC: %s "
@@ -459,6 +460,10 @@ IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
 
         toCommit->mispredictInst[tid] = inst;
         toCommit->includeSquashInst[tid] = false;
+
+        // NEW: record wrong path cohort
+        toCommit->squashPathId[tid]   = pid;
+        toCommit->squashPathEpoch[tid] = epoch;
 
         wroteToTimeBuffer = true;
     }
@@ -1286,8 +1291,13 @@ IEW::executeInsts()
                 DPRINTF(IEW, "[tid:%i] [sn:%llu] Execute: "
                         "Redirecting fetch to PC: %s\n",
                         tid, inst->seqNum, inst->pcState());
-                // If incorrect, then signal the ROB that it must be squashed.
-                squashDueToBranch(inst, tid);
+
+                // NEW: capture wrong-path cohort identity
+                const uint8_t wrong_pid   = inst->getPathId();
+                const uint32_t wrong_epoch = inst->getPathEpoch();
+
+                // extend squashDueToBranch to take pid/epoch, signal the ROB that it must be squashed.
+                squashDueToBranch(inst, tid, wrong_pid, wrong_epoch);
 
                 ppMispredict->notify(inst);
 

@@ -359,8 +359,11 @@ Rename::drainSanityCheck() const
     }
 }
 
-void
-Rename::squash(const InstSeqNum &squash_seq_num, ThreadID tid)
+void 
+Rename::squash(const InstSeqNum &squash_seq_num,
+                    ThreadID tid,
+                    uint8_t wrong_pid,
+                    uint32_t wrong_epoch)
 {
     DPRINTF(Rename, "[tid:%i] [squash sn:%llu] Squashing instructions.\n",
         tid,squash_seq_num);
@@ -394,20 +397,32 @@ Rename::squash(const InstSeqNum &squash_seq_num, ThreadID tid)
 
     // Squash any instructions from decode.
     for (int i=0; i<fromDecode->size; i++) {
-        if (fromDecode->insts[i]->threadNumber == tid &&
-            fromDecode->insts[i]->seqNum > squash_seq_num) {
-            fromDecode->insts[i]->setSquashed();
+        auto di = fromDecode->insts[i];
+        if (di->threadNumber == tid &&
+            di->seqNum > squash_seq_num &&
+            di->getPathId() == wrong_pid &&
+            di->getPathEpoch() == wrong_epoch) {
+            di->setSquashed();
             wroteToTimeBuffer = true;
         }
 
     }
+    // Don’t clear them unconditionally. Use the same predicate:
+    insts[tid].erase(std::remove_if(insts[tid].begin(), insts[tid].end(),
+        [&](const DynInstPtr &di){
+            return di->seqNum > squash_seq_num &&
+                di->getPathId() == wrong_pid &&
+                di->getPathEpoch() == wrong_epoch;
+        }),
+        insts[tid].end());
 
-    // Clear the instruction list and skid buffer in case they have any
-    // insts in them.
-    insts[tid].clear();
-
-    // Clear the skid buffer in case it has any data in it.
-    skidBuffer[tid].clear();
+    skidBuffer[tid].erase(std::remove_if(skidBuffer[tid].begin(), skidBuffer[tid].end(),
+        [&](const DynInstPtr &di){
+            return di->seqNum > squash_seq_num &&
+                di->getPathId() == wrong_pid &&
+                di->getPathEpoch() == wrong_epoch;
+        }),
+        skidBuffer[tid].end());
 
     doSquash(squash_seq_num, tid);
 }
@@ -927,40 +942,46 @@ Rename::doSquash(const InstSeqNum &squashed_seq_num, ThreadID tid)
     // they did and freeing up the registers.
     while (!historyBuffer[tid].empty() &&
            hb_it->instSeqNum > squashed_seq_num) {
-        assert(hb_it != historyBuffer[tid].end());
+        if (hb_it->pathId == wrong_pid &&
+            hb_it->pathEpoch == wrong_epoch) {
+        
+            assert(hb_it != historyBuffer[tid].end());
 
-        DPRINTF(Rename, "[tid:%i] Removing history entry with sequence "
-                "number %i (archReg: %d, newPhysReg: %d, prevPhysReg: %d).\n",
-                tid, hb_it->instSeqNum, hb_it->archReg.index(),
-                hb_it->newPhysReg->index(), hb_it->prevPhysReg->index());
+            DPRINTF(Rename, "[tid:%i] Removing history entry with sequence "
+                    "number %i (archReg: %d, newPhysReg: %d, prevPhysReg: %d).\n",
+                    tid, hb_it->instSeqNum, hb_it->archReg.index(),
+                    hb_it->newPhysReg->index(), hb_it->prevPhysReg->index());
 
-        // Undo the rename mapping only if it was really a change.
-        // Special regs that are not really renamed (like misc regs
-        // and the zero reg) can be recognized because the new mapping
-        // is the same as the old one.  While it would be merely a
-        // waste of time to update the rename table, we definitely
-        // don't want to put these on the free list.
-        if (hb_it->newPhysReg != hb_it->prevPhysReg) {
-            // Tell the rename map to set the architected register to the
-            // previous physical register that it was renamed to.
-            renameMap[tid]->setEntry(hb_it->archReg, hb_it->prevPhysReg);
+            // Undo the rename mapping only if it was really a change.
+            // Special regs that are not really renamed (like misc regs
+            // and the zero reg) can be recognized because the new mapping
+            // is the same as the old one.  While it would be merely a
+            // waste of time to update the rename table, we definitely
+            // don't want to put these on the free list.
+            if (hb_it->newPhysReg != hb_it->prevPhysReg) {
+                // Tell the rename map to set the architected register to the
+                // previous physical register that it was renamed to.
+                renameMap[tid]->setEntry(hb_it->archReg, hb_it->prevPhysReg);
 
-            // The phys regs can still be owned by squashing but
-            // executing instructions in IEW at this moment. To avoid
-            // ownership hazard in SMT CPU, we delay the freelist update
-            // until they are indeed squashed in the commit stage.
-            freeingInProgress[tid].push_back(hb_it->newPhysReg);
+                // The phys regs can still be owned by squashing but
+                // executing instructions in IEW at this moment. To avoid
+                // ownership hazard in SMT CPU, we delay the freelist update
+                // until they are indeed squashed in the commit stage.
+                freeingInProgress[tid].push_back(hb_it->newPhysReg);
+            }
+
+            // Notify potential listeners that the register mapping needs to be
+            // removed because the instruction it was mapped to got squashed. Note
+            // that this is done before hb_it is incremented.
+            ppSquashInRename->notify(std::make_pair(hb_it->instSeqNum,
+                                                    hb_it->newPhysReg));
+
+            historyBuffer[tid].erase(hb_it++);
+
+            ++stats.undoneMaps;
+        } else {
+            ++hb_it;
         }
-
-        // Notify potential listeners that the register mapping needs to be
-        // removed because the instruction it was mapped to got squashed. Note
-        // that this is done before hb_it is incremented.
-        ppSquashInRename->notify(std::make_pair(hb_it->instSeqNum,
-                                                hb_it->newPhysReg));
-
-        historyBuffer[tid].erase(hb_it++);
-
-        ++stats.undoneMaps;
     }
 }
 

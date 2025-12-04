@@ -159,6 +159,9 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
     }
     // Get the size of an instruction.
     instSize = decoder[0]->moreBytesSize();
+    // Resize path tag vectors
+    pendingPathId.resize(numThreads, 0);
+    pendingPathEpoch.resize(numThreads, 0);
 }
 
 std::string Fetch::name() const { return cpu->name() + ".fetch"; }
@@ -1151,6 +1154,11 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
         macroop[tid] = NULL;
     decoder[tid]->reset();
 
+    // Prefer cohort tags from the squash message if you have them; else use squashInst.
+    uint8_t wrong_pid   = squashInst ? squashInst->getPathId()    : /*fallback*/ pendingPathId[tid];
+    uint32_t wrong_epoch = squashInst ? squashInst->getPathEpoch() : /*fallback*/ pendingPathEpoch[tid];
+    InstSeqNum wrong_seq = squashInst ? squashInst->seqNum         : 0;
+
     // Clear the icache miss if it's outstanding.
     if (fetchStatus[tid] == IcacheWaitResponse) {
         DPRINTF(Fetch, "[tid:%i] Squashing outstanding Icache miss.\n",
@@ -1161,10 +1169,15 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
                 tid);
         memReq[tid] = NULL;
     } else if (fetchStatus[tid] == ApbWait) {
-        // Cancel pending APB read
-        DPRINTF(Fetch, "[tid:%i] Squashing outstanding APB read.\n", tid);
-        apbReadyTick[tid] = 0;
-        pendingApbAddr[tid] = 0;
+        // Cancel pending APB read only if it's for the wrong cohort.
+        if (pendingPathId[tid] == wrong_pid &&
+            pendingPathEpoch[tid] == wrong_epoch) {
+            DPRINTF(Fetch, "[tid:%i] Squashing outstanding APB read "
+                           "(pid=%u epoch=%u).\n", tid, wrong_pid, wrong_epoch);
+            apbReadyTick[tid] = 0;
+            pendingApbAddr[tid] = 0;
+            fetchBufferValid[tid] = false;
+        }
     }
 
     // Get rid of the retrying packet if it was from this thread.
@@ -1179,8 +1192,24 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
 
     fetchStatus[tid] = Squashing;
 
-    // Empty fetch queue
-    fetchQueue[tid].clear();
+    // Selectively remove wrong-path, younger-than-branch entries from fetchQueue.
+    // If squashInst is null (non-branch squash), conservatively clear the queue.
+    auto &fq = fetchQueue[tid];
+    if (!fq.empty()) {
+        if (squashInst) {
+            fq.erase(std::remove_if(fq.begin(), fq.end(),
+                [&](const DynInstPtr &di){
+                    return di->threadNumber == tid &&
+                           di->getPathId() == wrong_pid &&
+                           di->getPathEpoch() == wrong_epoch &&
+                           di->seqNum > wrong_seq;
+                }),
+                fq.end());
+        } else {
+            // No specific branch — global squash fallback.
+            fq.clear();
+        }
+    }
 
     // Clean up any outstanding alternate path fetches for this thread
     for (auto it = outstandingAltFetches.begin(); it != outstandingAltFetches.end();) {
@@ -1516,8 +1545,11 @@ Fetch::buildInst(ThreadID tid, StaticInstPtr staticInst,
     DynInstPtr instruction = new (arrays) DynInst(
             arrays, staticInst, curMacroop, this_pc, next_pc, seq, cpu);
     instruction->setTid(tid);
-
     instruction->setThreadState(cpu->thread[tid]);
+
+    // --- NEW: set path tags here ---
+    instruction->setPath(thread[tid].pendingPathId,
+                     thread[tid].pendingPathEpoch);
 
     DPRINTF(Fetch, "[tid:%i] Instruction PC %s created [sn:%lli].\n",
             tid, this_pc, seq);
@@ -1668,6 +1700,7 @@ Fetch::fetch(bool &status_change)
 
         fetchStatus[tid] = Running;
         status_change = true;
+        pendingPathId[tid] = 0;        // primary path
     } else if (fetchStatus[tid] == ApbWait) {
         // Waiting for APB read to complete
         if (curTick() >= apbReadyTick[tid]) {
@@ -1680,6 +1713,8 @@ Fetch::fetch(bool &status_change)
                 fetchBufferValid[tid] = true;
                 fetchStatus[tid] = Running;
                 status_change = true;
+                pendingPathId[tid] = 1;        // mark as alternate path
+                pendingPathEpoch[tid]++;       // bump epoch counter
 
                 // Track APB-assisted recovery
                 if (squashIsBranchMisp[tid] && squashStartTick[tid] > 0) {

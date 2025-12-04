@@ -438,6 +438,10 @@ class Fetch
     /** Pointer to the APB. */
     APB *apb = nullptr;
 
+    // --- New fields for dual-path tagging ---
+    std::vector<uint8_t> pendingPathId;     // indexed by tid
+    std::vector<uint32_t> pendingPathEpoch; // indexed by tid
+
     // Track outstanding speculative alternate-path requests (aligned line addresses)
     std::unordered_set<Addr> outstandingAltFetches;
 

@@ -78,6 +78,10 @@ class DynInst : public ExecContext, public RefCounted
     DynInst(const StaticInstPtr &staticInst, const StaticInstPtr &macroop,
             InstSeqNum seq_num, CPU *cpu);
 
+    // --- New fields for dual-path tagging ---
+    uint8_t pathId = 0;       // 0 = primary path, 1 = alternate path
+    uint32_t pathEpoch = 0;   // epoch counter to distinguish reused pathIds
+
   public:
     // The list of instructions iterator type.
     typedef typename std::list<DynInstPtr>::iterator ListIt;
@@ -946,6 +950,12 @@ class DynInst : public ExecContext, public RefCounted
 
     /** Sets the pointer to the thread state. */
     void setThreadState(ThreadState *state) { thread = state; }
+
+    /** Sets the path tag (alternate vs. primary). */
+    void setPath(uint8_t pid, uint32_t epoch) {
+        pathId = pid;
+        pathEpoch = epoch;
+    }
 
     /** Returns the thread context. */
     gem5::ThreadContext *tcBase() const override { return thread->getTC(); }
