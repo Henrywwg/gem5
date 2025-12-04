@@ -1519,6 +1519,14 @@ Fetch::buildInst(ThreadID tid, StaticInstPtr staticInst,
 
     instruction->setThreadState(cpu->thread[tid]);
 
+    // Dual-path execution: By default, all instructions are on primary path (pathID=0)
+    // Alternate path instructions will have this overridden in fetchAlternatePathFromAPB()
+    instruction->setPathID(0);
+    instruction->setSpeculativePath(false, 0);
+    
+    // Track primary path instruction fetch
+    cpu->cpuStats.dualPathPrimaryInsts++;
+
     DPRINTF(Fetch, "[tid:%i] Instruction PC %s created [sn:%lli].\n",
             tid, this_pc, seq);
 
@@ -1552,6 +1560,144 @@ Fetch::buildInst(ThreadID tid, StaticInstPtr staticInst,
 
     return instruction;
 }
+
+unsigned
+Fetch::fetchAlternatePathFromAPB(ThreadID tid, InstSeqNum branch_seq_num)
+{
+    /** This function implements the core dual-path fetch logic.
+     * 
+     * WHEN IT'S CALLED:
+     * After the primary path has been fetched in the main fetch() loop,
+     * if we have a conditional branch with low confidence.
+     *
+     * WHAT IT DOES:
+     * 1. Looks up the SpeculativePath entry for this branch
+     * 2. Checks if we should fetch alternate path (throttling, APB availability)
+     * 3. Reads alternate path instructions from APB
+     * 4. Creates DynInst objects for each instruction
+     * 5. Tags them with pathID=1 and speculative flags
+     * 6. Adds them to the fetch queue (alongside primary path insts)
+     * 7. Updates the instruction counter for throttling
+     *
+     * WHY THIS DESIGN:
+     * - APB is already populated by existing code (pre-fetch alternate paths)
+     * - We just need to READ from APB and tag instructions differently
+     * - Simple, leverages existing infrastructure
+     * - Graceful: if APB empty or throttled, just returns 0 (no alternate fetch)
+     */
+    
+    // Safety check: Do we even have dual-path infrastructure?
+    if (!cpu->dualPathSwitcher || !apb) {
+        return 0;  // No dual-path support configured
+    }
+    
+    // Check if dual-path mode is currently active
+    if (!cpu->dualPathSwitcher->useDualPath()) {
+        return 0;  // In single-path mode, don't fetch alternate
+    }
+    
+    // Look up the speculative path entry for this branch
+    auto pathIt = cpu->activeSpeculativePaths.find(branch_seq_num);
+    if (pathIt == cpu->activeSpeculativePaths.end()) {
+        return 0;  // No active speculative path for this branch
+    }
+    
+    CPU::SpeculativePath &path = pathIt->second;
+    
+    // Check throttling: has alternate path fetched too many instructions?
+    if (path.shouldThrottleFetch()) {
+        DPRINTF(Fetch, "[tid:%i] Alternate path throttled (fetched %d/%d insts)\n",
+                tid, path.instructionsFetched, path.maxInstructionsAhead);
+        
+        // Track throttling events
+        cpu->cpuStats.dualPathThrottled++;
+        
+        return 0;  // Throttled, don't fetch more
+    }
+    
+    // Check if APB has the alternate path
+    Addr alt_pc = path.alternatePath;
+    if (!apb->contains(alt_pc)) {
+        DPRINTF(Fetch, "[tid:%i] APB does not contain alternate path %#x\n",
+                tid, alt_pc);
+        return 0;  // APB miss, can't fetch alternate path
+    }
+    
+    // Great! We can fetch from APB. Read the cache line.
+    const uint8_t* apb_line = apb->readLine(alt_pc);
+    if (!apb_line) {
+        warn("APB contains() returned true but readLine() returned null for %#x\n",
+             alt_pc);
+        return 0;  // Shouldn't happen, but be defensive
+    }
+    
+    DPRINTF(Fetch, "[tid:%i] Fetching alternate path from APB: PC=%#x, branch_sn=%llu\n",
+            tid, alt_pc, branch_seq_num);
+    
+    // Now we need to decode instructions from the APB line
+    // This is similar to the main fetch loop, but simpler (no branches/macroop handling)
+    
+    unsigned num_alt_insts = 0;
+    Addr line_pc = fetchBufferAlignPC(alt_pc);  // Aligned start of cache line
+    unsigned line_size = apb->getLineSize();
+    
+    // Create a temporary PC state for the alternate path
+    std::unique_ptr<PCStateBase> alt_pc_state(pc[tid]->clone());
+    alt_pc_state->set(alt_pc);
+    
+    // We'll fetch up to fetchWidth instructions OR until we hit a branch
+    // (to avoid complexity of handling branches in alternate path)
+    unsigned fetch_limit = std::min(fetchWidth, 
+                                    fetchQueueSize - (unsigned)fetchQueue[tid].size());
+    
+    // Temporary decoder for alternate path
+    // Note: In a real implementation, you might reuse decoder[tid] or have a separate one
+    // For simplicity, we'll create instructions directly from the APB line
+    
+    // SIMPLIFIED VERSION: Just create a few instructions from the alternate path
+    // In a full implementation, you'd decode the entire cache line properly
+    // For now, we'll create up to 4 instructions as a proof of concept
+    
+    for (unsigned i = 0; i < fetch_limit && i < 4; ++i) {
+        // In a real implementation, you'd decode actual instructions from apb_line
+        // For this implementation, we'll create NOP instructions as placeholders
+        // This demonstrates the path tagging mechanism
+        
+        std::unique_ptr<PCStateBase> next_alt_pc(alt_pc_state->clone());
+        next_alt_pc->advance();  // Move to next instruction
+        
+        // Create the instruction (using NOP as placeholder for demonstration)
+        // In real implementation: decode from apb_line[offset]
+        DynInstPtr alt_inst = buildInst(tid, nopStaticInstPtr, nullptr,
+                                       *alt_pc_state, *next_alt_pc, false);
+        
+        // KEY STEP: Tag this instruction as being from the alternate path
+        alt_inst->setPathID(1);  // Path 1 = alternate/speculative path
+        alt_inst->setSpeculativePath(true, branch_seq_num);
+        
+        // Track alternate path instruction fetch
+        cpu->cpuStats.dualPathAlternateInsts++;
+        
+        DPRINTF(Fetch, "[tid:%i] Created alternate path inst [sn:%llu] PC=%#x pathID=1\n",
+                tid, alt_inst->seqNum, alt_pc_state->instAddr());
+        
+        // Move to next instruction
+        alt_pc_state = std::move(next_alt_pc);
+        num_alt_insts++;
+        
+        // Note: buildInst() already added instruction to fetchQueue[tid]
+        // so we don't need to do it again
+    }
+    
+    // Update the instruction counter for throttling
+    path.instructionsFetched += num_alt_insts;
+    
+    DPRINTF(Fetch, "[tid:%i] Fetched %d alternate path instructions (total: %d/%d)\n",
+            tid, num_alt_insts, path.instructionsFetched, path.maxInstructionsAhead);
+    
+    return num_alt_insts;
+}
+
 bool
 Fetch::fetchCacheLineNonBlocking(Addr linePC, uint8_t *dst, int size, ThreadID tid)
 {
@@ -1876,6 +2022,58 @@ Fetch::fetch(bool &status_change)
                 instruction->fetchTick = curTick();
             }
 #endif
+
+            // DUAL-PATH EXECUTION: Check if this is a conditional branch
+            // and we should fetch the alternate path.
+            // IMPORTANT: Only spawn alternate paths from the PRIMARY path (pathID=0).
+            // If a branch appears in an alternate path (pathID=1), it just uses
+            // normal branch prediction. This prevents nested/multiple alternate paths
+            // and keeps resource usage bounded.
+            // ALSO: Only allow ONE alternate path at a time. If there's already an
+            // active alternate path, don't spawn another until it resolves.
+            if (instruction->isCondCtrl() && 
+                instruction->getPathID() == 0 &&  // Only from primary path!
+                cpu->activeSpeculativePaths.empty() &&  // No other alternate paths active!
+                cpu->dualPathSwitcher && apb) {
+                
+                // Get branch prediction confidence from the instruction
+                double confidence = instruction->getBranchPredConfidence();
+                
+                // Check if we should fetch alternate path for this branch
+                if (cpu->dualPathSwitcher->shouldFetchAlternatePath(confidence)) {
+                    // Determine the alternate path PC
+                    // If branch was predicted taken, alternate is not-taken (fall-through)
+                    // If branch was predicted not-taken, alternate is taken (target)
+                    Addr predicted_pc = next_pc->instAddr();
+                    Addr fallthrough_pc = this_pc.instAddr();
+                    this_pc.staticInst->advancePC(fallthrough_pc);
+                    
+                    // Assume lookupAndUpdateNextPC sets next_pc to predicted target
+                    // So alternate is the opposite path
+                    Addr alternate_pc = (predicted_pc == fallthrough_pc) ? 
+                                       instruction->readPredTarg().instAddr() : fallthrough_pc;
+                    
+                    // Spawn the speculative path (creates entry in CPU's tracking map)
+                    // This only creates the metadata; actual fetch happens below
+                    bool spawned = cpu->spawnSpeculativePath(instruction, alternate_pc, tid);
+                    
+                    if (spawned) {
+                        DPRINTF(Fetch, "[tid:%i] Spawned dual-path for branch [sn:%llu] "
+                               "pred=%#x alt=%#x conf=%.2f\n",
+                               tid, instruction->seqNum, predicted_pc, alternate_pc, confidence);
+                        
+                        // Now fetch alternate path instructions from APB (if available)
+                        // This happens immediately in the same cycle
+                        unsigned alt_insts = fetchAlternatePathFromAPB(tid, instruction->seqNum);
+                        
+                        if (alt_insts > 0) {
+                            DPRINTF(Fetch, "[tid:%i] Fetched %d alternate path instructions\n",
+                                   tid, alt_insts);
+                            numInst += alt_insts;  // Count toward this cycle's fetch
+                        }
+                    }
+                }
+            }
 
             set(next_pc, this_pc);
 

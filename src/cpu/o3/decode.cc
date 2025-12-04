@@ -658,6 +658,12 @@ Decode::decodeInsts(ThreadID tid)
         DPRINTF(Decode, "[tid:%i] Processing instruction [sn:%lli] with "
                 "PC %s\n", tid, inst->seqNum, inst->pcState());
 
+        // Dual-path execution: Path tags (pathID, isSpeculativePath) are
+        // preserved automatically as they're part of the DynInst object.
+        // No special handling needed - tags flow through transparently.
+        DPRINTF(Decode, "[tid:%i] Instruction [sn:%lli] pathID=%d speculative=%d\n",
+                tid, inst->seqNum, inst->getPathID(), inst->isOnSpeculativePath());
+
         if (inst->isSquashed()) {
             DPRINTF(Decode, "[tid:%i] Instruction %i with PC %s is "
                     "squashed, skipping.\n",

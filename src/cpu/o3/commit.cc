@@ -816,6 +816,29 @@ Commit::commit()
                 }
                 ++stats.branchMispredicts;
 
+                // Dual-path execution: Handle branch misprediction for branches
+                // that spawned alternate paths. If this mispredicted branch had
+                // an alternate path, the alternate path was CORRECT (since the
+                // primary path mispredicted). Mark the path as resolved.
+                DynInstPtr mispredict_inst = toIEW->commitInfo[tid].mispredictInst;
+                if (mispredict_inst->isCondCtrl()) {
+                    InstSeqNum branch_seq = mispredict_inst->seqNum;
+                    
+                    // Check if this branch spawned an alternate path
+                    if (cpu->activeSpeculativePaths.find(branch_seq) != 
+                        cpu->activeSpeculativePaths.end()) {
+                        
+                        DPRINTF(Commit, "[tid:%i] [sn:%llu] Mispredicted branch "
+                                "had alternate path. Marking alternate path as "
+                                "correct.\n", tid, branch_seq);
+                        
+                        // For mispredictions: taken_path_correct = false because
+                        // the primary (predicted) path was wrong. This means the
+                        // alternate path was correct.
+                        cpu->resolveSpeculativePath(branch_seq, false);
+                    }
+                }
+
                 // Update dual-path switcher with misprediction
                 if (cpu->dualPathSwitcher) {
                     // Get actual confidence from the mispredicted instruction
@@ -873,6 +896,30 @@ Commit::commit()
             toIEW->commitInfo[tid].emptyROB = true;
             toIEW->commitInfo[tid].freeROBEntries = rob->numFreeEntries(tid);
             wroteToTimeBuffer = true;
+            
+            // Dual-path execution: When ROB is empty, cleanup resolved
+            // speculative paths. All instructions from both paths have been
+            // retired (either committed or squashed). Only cleanup paths that
+            // have been marked as resolved by resolveSpeculativePath().
+            auto it = cpu->activeSpeculativePaths.begin();
+            while (it != cpu->activeSpeculativePaths.end()) {
+                InstSeqNum branch_seq = it->first;
+                const auto& path = it->second;
+                
+                // Only cleanup if the path has been resolved (branch committed)
+                if (path.resolved) {
+                    DPRINTF(Commit, "[tid:%i] ROB empty, cleaning up resolved "
+                            "speculative path from branch [sn:%llu] "
+                            "(wasCorrect=%d)\n", 
+                            tid, branch_seq, path.wasCorrect);
+                    
+                    cpu->cleanupSpeculativePath(branch_seq);
+                    // cleanupSpeculativePath erases from map, so restart iterator
+                    it = cpu->activeSpeculativePaths.begin();
+                } else {
+                    ++it;
+                }
+            }
         }
 
     }
@@ -934,12 +981,48 @@ Commit::commitInsts()
                 "Trying to commit head instruction, [tid:%i] [sn:%llu]\n",
                 tid, head_inst->seqNum);
 
+        // Dual-path execution: Before attempting to commit, check if this
+        // instruction belongs to a wrong speculative path. If the path has
+        // been resolved and this instruction was on the incorrect path, mark
+        // it as squashed so it gets retired without committing.
+        if (!head_inst->isSquashed() && cpu->isFromSquashedPath(head_inst)) {
+            DPRINTF(Commit, "[tid:%i] [sn:%llu] Instruction from wrong "
+                    "speculative path (branch [sn:%llu]), marking as squashed.\n",
+                    tid, head_inst->seqNum, 
+                    head_inst->getSpeculativeBranchSeqNum());
+            
+            head_inst->setSquashed();
+        }
+
         // If the head instruction is squashed, it is ready to retire
         // (be removed from the ROB) at any time.
         if (head_inst->isSquashed()) {
 
             DPRINTF(Commit, "Retiring squashed instruction from "
                     "ROB.\n");
+
+            // Dual-path execution: Check if this squashed instruction belongs
+            // to a wrong path that needs cleanup. When all instructions from
+            // a resolved speculative path have been retired, cleanup the
+            // tracking structures.
+            if (head_inst->isOnSpeculativePath()) {
+                InstSeqNum branch_seq = head_inst->getSpeculativeBranchSeqNum();
+                
+                // Check if this instruction is from a squashed path
+                if (cpu->isFromSquashedPath(head_inst)) {
+                    DPRINTF(Commit, "[tid:%i] Retiring wrong-path instruction "
+                            "[sn:%llu] from branch [sn:%llu]\n",
+                            tid, head_inst->seqNum, branch_seq);
+                    
+                    // Track alternate path instruction squashing
+                    cpu->cpuStats.dualPathAlternateSquashed++;
+                    
+                    // Note: We'll cleanup the path tracking once the ROB
+                    // is empty or when we're sure all wrong-path instructions
+                    // have been processed. This happens naturally as squashed
+                    // instructions get retired.
+                }
+            }
 
             rob->retireHead(commit_thread);
 
@@ -1259,6 +1342,45 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
     if (head_inst->isHtmStart())
         iewStage->setLastRetiredHtmUid(tid, head_inst->getHtmTransactionUid());
 
+    // Dual-path execution: Handle branch resolution for branches that spawned
+    // alternate paths. When a branch commits, we know the correct direction.
+    // If this branch spawned an alternate path (stored in activeSpeculativePaths
+    // map), we need to determine which path was correct and squash the wrong one.
+    if (head_inst->isControl() && head_inst->isCondCtrl()) {
+        InstSeqNum branch_seq = head_inst->seqNum;
+        
+        // Check if this branch spawned an alternate path
+        if (cpu->activeSpeculativePaths.find(branch_seq) != 
+            cpu->activeSpeculativePaths.end()) {
+            
+            DPRINTF(Commit, "[tid:%i] [sn:%llu] Branch that spawned alternate "
+                    "path is committing successfully (no misprediction). "
+                    "Resolving dual-path execution.\n", tid, branch_seq);
+            
+            // If we're here, the branch committed without mispredicting,
+            // which means the primary (taken) path was CORRECT. Mark this
+            // path as resolved with taken_path_correct = true.
+            cpu->resolveSpeculativePath(branch_seq, true);
+            
+            // The alternate path (pathID=1) needs to be squashed. However,
+            // unlike a misprediction, we don't need to redirect fetch or
+            // squash the primary path. We just need to remove alternate path
+            // instructions from the pipeline.
+            //
+            // These instructions will be filtered out naturally:
+            // - When they try to commit, isFromSquashedPath() returns true
+            // - They get retired as squashed instructions
+            // - No state corruption because stores are protected by canWB()
+            //
+            // We mark them as squashed so they don't commit or execute further.
+            // The ROB will retire them as squashed instructions.
+            
+            DPRINTF(Commit, "[tid:%i] [sn:%llu] Dual-path resolution complete. "
+                    "Primary path correct, alternate path marked for removal.\n",
+                    tid, branch_seq);
+        }
+    }
+
     // Update dual-path switcher for correctly predicted branches
     if (cpu->dualPathSwitcher && head_inst->isControl()) {
         // Get actual confidence from the correctly predicted instruction
@@ -1268,6 +1390,12 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
 
     // Finally clear the head ROB entry.
     rob->retireHead(tid);
+    
+    // Dual-path execution: Track primary path commits
+    // (Alternate path instructions never reach here - they get squashed)
+    if (!head_inst->isOnSpeculativePath()) {
+        cpu->cpuStats.dualPathPrimaryCommitted++;
+    }
 
 #if TRACING_ON
     if (debug::O3PipeView) {

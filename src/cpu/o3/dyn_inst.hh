@@ -140,6 +140,25 @@ class DynInst : public ExecContext, public RefCounted
     /** InstRecord that tracks this instructions. */
     trace::InstRecord *traceData = nullptr;
 
+    /** Dual-path execution support: path identifier for this instruction.
+     * Path 0 is the primary/predicted path, Path 1+ are speculative alternate paths.
+     * During dual-path execution, both paths execute in parallel until the branch
+     * resolves, at which point the incorrect path is squashed.
+     */
+    uint32_t pathID = 0;
+
+    /** True if this instruction belongs to a speculative alternate path.
+     * This is a quick-check optimization (equivalent to pathID != 0).
+     */
+    bool isSpeculativePath = false;
+
+    /** Sequence number of the branch that spawned this speculative path.
+     * Used to track which branch "owns" this path so we can squash all
+     * instructions from the incorrect path when the branch resolves.
+     * Only valid when isSpeculativePath == true.
+     */
+    InstSeqNum speculativeBranchSeqNum = 0;
+
   protected:
     enum Status
     {
@@ -539,6 +558,31 @@ class DynInst : public ExecContext, public RefCounted
     double getBranchPredConfidence() const
     {
         return branchPredConfidence;
+    }
+
+    /** Dual-path execution: Get the path ID of this instruction.
+     * Path 0 is the primary path, Path 1+ are speculative alternate paths.
+     */
+    uint32_t getPathID() const { return pathID; }
+
+    /** Dual-path execution: Set the path ID for this instruction. */
+    void setPathID(uint32_t path_id) { pathID = path_id; }
+
+    /** Dual-path execution: Check if this instruction is on a speculative path. */
+    bool isOnSpeculativePath() const { return isSpeculativePath; }
+
+    /** Dual-path execution: Mark this instruction as being on a speculative path. */
+    void
+    setSpeculativePath(bool is_spec, InstSeqNum branch_seq_num = 0)
+    {
+        isSpeculativePath = is_spec;
+        speculativeBranchSeqNum = branch_seq_num;
+    }
+
+    /** Dual-path execution: Get the branch sequence number that spawned this path. */
+    InstSeqNum getSpeculativeBranchSeqNum() const
+    {
+        return speculativeBranchSeqNum;
     }
 
     /** Returns whether the instruction mispredicted. */

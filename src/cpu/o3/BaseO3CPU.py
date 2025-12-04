@@ -218,6 +218,12 @@ class BaseO3CPU(BaseCPU):
         NULL, "Dual-Path Execution Switcher"
     )
 
+    maxSpecPathInstructions = Param.Unsigned(
+        32,
+        "Maximum instructions alternate path can fetch ahead of branch resolution. "
+        "Prevents resource exhaustion when branch is stalled on cache miss."
+    )
+
     needsTSO = Param.Bool(False, "Enable TSO Memory model")
 
     recvRespThrottling = Param.Bool(

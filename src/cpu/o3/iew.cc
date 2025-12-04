@@ -860,6 +860,14 @@ IEW::dispatch(ThreadID tid)
 void
 IEW::dispatchInsts(ThreadID tid)
 {
+    // Dual-path execution: Instructions from both primary and alternate paths
+    // are dispatched to IQ/LSQ without distinction. They compete for resources
+    // naturally. Stores are protected by the two-phase commit mechanism
+    // (commitStores marks canWB, writebackStores writes to memory) ensuring
+    // only committed stores reach memory. Loads execute speculatively from both
+    // paths (standard behavior). Squashed instructions are filtered at dispatch
+    // and execution. No path-specific changes needed.
+
     // Obtain instructions from skid buffer if unblocking, or queue from rename
     // otherwise.
     std::queue<DynInstPtr> &insts_to_dispatch =

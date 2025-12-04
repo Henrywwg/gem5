@@ -144,6 +144,11 @@ CPU::CPU(const BaseO3CPUParams &params)
                 dualPathSwitcher->useDualPath() ? "dual-path" : "single-path");
     }
 
+    // Initialize dual-path execution parameters
+    maxSpecPathInstructions = params.maxSpecPathInstructions;
+    DPRINTF(O3CPU, "Dual-path max instructions ahead: %d\n",
+            maxSpecPathInstructions);
+
     if (params.checker) {
         BaseCPU *temp_checker = params.checker;
         checker = dynamic_cast<Checker<DynInstPtr> *>(temp_checker);
@@ -361,7 +366,23 @@ CPU::CPUStats::CPUStats(CPU *cpu)
                "to idling"),
       ADD_STAT(quiesceCycles, statistics::units::Cycle::get(),
                "Total number of cycles that CPU has spent quiesced or waiting "
-               "for an interrupt")
+               "for an interrupt"),
+      ADD_STAT(dualPathSpawned, statistics::units::Count::get(),
+               "Number of alternate paths spawned for low-confidence branches"),
+      ADD_STAT(dualPathPrimaryCorrect, statistics::units::Count::get(),
+               "Number of times primary path was correct (alternate squashed)"),
+      ADD_STAT(dualPathAlternateCorrect, statistics::units::Count::get(),
+               "Number of times alternate path was correct (misprediction)"),
+      ADD_STAT(dualPathThrottled, statistics::units::Count::get(),
+               "Number of times alternate path fetch was throttled"),
+      ADD_STAT(dualPathPrimaryInsts, statistics::units::Count::get(),
+               "Total instructions fetched on primary path (pathID=0)"),
+      ADD_STAT(dualPathAlternateInsts, statistics::units::Count::get(),
+               "Total instructions fetched on alternate path (pathID=1)"),
+      ADD_STAT(dualPathPrimaryCommitted, statistics::units::Count::get(),
+               "Total instructions committed from primary path"),
+      ADD_STAT(dualPathAlternateSquashed, statistics::units::Count::get(),
+               "Total instructions squashed from alternate path")
 {
     // Register any of the O3CPU's stats here.
     timesIdled
@@ -1480,6 +1501,173 @@ CPU::htmSendAbortSignal(ThreadID tid, uint64_t htm_uid,
     // TODO include correct error handling here
     if (!iew.ldstQueue.getDataPort().sendTimingReq(abort_pkt)) {
         panic("HTM abort signal was not sent to the memory subsystem.");
+    }
+}
+
+// ============================================================================
+// Dual-Path Execution Implementation
+// ============================================================================
+
+bool
+CPU::spawnSpeculativePath(DynInstPtr branch_inst, Addr alt_pc, ThreadID tid)
+{
+    /** This method is called by the fetch stage when:
+     * 1. DualPathSwitcher indicates we should use dual-path mode
+     * 2. A conditional branch is encountered
+     * 3. We want to speculatively execute the alternate path
+     *
+     * What it does:
+     * - Creates a SpeculativePath entry to track this branch's alternate path
+     * - Stores the branch instruction and alternate PC
+     * - The fetch stage will then fetch instructions from both paths
+     * - Both paths will flow through decode/rename/execute in parallel
+     * - When the branch resolves in commit, we'll know which path to keep
+     */
+    
+    InstSeqNum branch_seq = branch_inst->seqNum;
+    
+    // Check if we already have a speculative path for this branch
+    // This shouldn't happen, but let's be defensive
+    if (activeSpeculativePaths.find(branch_seq) != activeSpeculativePaths.end()) {
+        warn("Attempted to spawn duplicate speculative path for branch %d\n",
+             branch_seq);
+        return false;
+    }
+    
+    // Create the speculative path entry
+    activeSpeculativePaths.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(branch_seq),
+        std::forward_as_tuple(branch_inst, alt_pc, tid, maxSpecPathInstructions)
+    );
+    
+    DPRINTF(O3CPU, "Spawned speculative path for branch [sn:%llu] "
+            "alt_pc=%#x tid=%d max_insts=%d\n",
+            branch_seq, alt_pc, tid, maxSpecPathInstructions);
+    
+    // Update statistics
+    cpuStats.dualPathSpawned++;
+    
+    return true;
+}
+
+bool
+CPU::resolveSpeculativePath(InstSeqNum branch_seq_num, bool taken_path_correct)
+{
+    /** This method is called by the commit stage when a branch executes:
+     * 1. The branch has completed execution and we know the actual direction
+     * 2. We can now determine which path (predicted or alternate) was correct
+     * 3. Mark the incorrect path for squashing
+     *
+     * What it does:
+     * - Finds the SpeculativePath entry for this branch
+     * - Marks it as resolved
+     * - Records which path was correct
+     * - The commit stage will then squash instructions from the wrong path
+     *
+     * The 'taken_path_correct' parameter tells us:
+     * - If true: the predicted path was correct, squash the alternate path
+     * - If false: the alternate path was correct, squash the predicted path
+     */
+    
+    auto it = activeSpeculativePaths.find(branch_seq_num);
+    
+    // If we don't find the path, it means this branch didn't spawn an
+    // alternate path (maybe confidence was high, or dual-path was disabled)
+    if (it == activeSpeculativePaths.end()) {
+        return false;  // Not an error, just means no dual-path for this branch
+    }
+    
+    SpeculativePath &path = it->second;
+    
+    // Mark the path as resolved
+    path.resolved = true;
+    path.wasCorrect = !taken_path_correct;  // Alternate path correct if taken was wrong
+    
+    DPRINTF(O3CPU, "Resolved speculative path for branch [sn:%llu] "
+            "taken_correct=%d, alt_path_correct=%d\n",
+            branch_seq_num, taken_path_correct, path.wasCorrect);
+    
+    // Update statistics based on which path was correct
+    if (taken_path_correct) {
+        cpuStats.dualPathPrimaryCorrect++;
+    } else {
+        cpuStats.dualPathAlternateCorrect++;
+    }
+    
+    return true;
+}
+
+bool
+CPU::isFromSquashedPath(DynInstPtr inst)
+{
+    /** This method determines if an instruction should be squashed because
+     * it came from an incorrect speculative path.
+     *
+     * Called by: commit stage for each instruction trying to commit
+     *
+     * Logic:
+     * 1. If instruction is not on a speculative path -> keep it (return false)
+     * 2. If instruction is speculative, find the branch that spawned its path
+     * 3. Check if that branch has been resolved
+     * 4. If resolved and path was WRONG -> squash it (return true)
+     * 5. If resolved and path was CORRECT -> keep it (return false)
+     * 6. If not yet resolved -> keep it for now (return false), will resolve later
+     */
+    
+    // Primary path instructions are never squashed due to path resolution
+    if (!inst->isOnSpeculativePath()) {
+        return false;
+    }
+    
+    // Find the branch that spawned this instruction's path
+    InstSeqNum branch_seq = inst->getSpeculativeBranchSeqNum();
+    auto it = activeSpeculativePaths.find(branch_seq);
+    
+    // If the path info is missing, the branch may have already committed
+    // and been cleaned up. In that case, if we're still seeing this instruction,
+    // it must be from the correct path (otherwise it would have been squashed earlier)
+    if (it == activeSpeculativePaths.end()) {
+        return false;
+    }
+    
+    const SpeculativePath &path = it->second;
+    
+    // If the branch hasn't resolved yet, don't squash - let both paths continue
+    if (!path.resolved) {
+        return false;
+    }
+    
+    // Branch has resolved - squash if this path was incorrect
+    // wasCorrect is true if the ALTERNATE path was right
+    // Instructions on alternate path have isSpeculativePath==true
+    // So: squash if path was NOT correct
+    return !path.wasCorrect;
+}
+
+void
+CPU::cleanupSpeculativePath(InstSeqNum branch_seq_num)
+{
+    /** This method cleans up a speculative path after the branch commits.
+     *
+     * Called by: commit stage after a branch instruction commits
+     *
+     * What it does:
+     * - Removes the SpeculativePath entry from our tracking map
+     * - Frees up the memory/resources associated with tracking this path
+     *
+     * Why cleanup is important:
+     * - Prevents memory leaks from accumulating path entries
+     * - Keeps the activeSpeculativePaths map size bounded
+     * - Once a branch commits, we no longer need to track its path
+     */
+    
+    auto it = activeSpeculativePaths.find(branch_seq_num);
+    
+    if (it != activeSpeculativePaths.end()) {
+        DPRINTF(O3CPU, "Cleaning up speculative path for branch [sn:%llu]\n",
+                branch_seq_num);
+        activeSpeculativePaths.erase(it);
     }
 }
 

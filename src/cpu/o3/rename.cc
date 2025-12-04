@@ -1028,6 +1028,12 @@ Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
     unsigned num_src_regs = inst->numSrcRegs();
     auto *isa = tc->getIsaPtr();
 
+    // Dual-path execution: Both primary and alternate path instructions use
+    // the same rename map and are renamed in program order. When a branch
+    // resolves, doSquash() automatically undoes rename mappings for the
+    // wrong path by unwinding the history buffer. No path-specific handling
+    // needed - the sequence-number-based squash mechanism handles everything.
+
     // Get the architectual register numbers from the source and
     // operands, and redirect them to the right physical register.
     for (int src_idx = 0; src_idx < num_src_regs; src_idx++) {

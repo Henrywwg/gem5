@@ -431,6 +431,21 @@ class Fetch
     /** Profile the reasons of fetch stall. */
     void profileStall(ThreadID tid);
 
+    /** Dual-path execution: Attempt to fetch alternate path from APB.
+     * Called after primary path has been fetched. Checks if:
+     * 1. Dual-path mode is active (DualPathSwitcher says yes)
+     * 2. There's an active speculative path for a recent branch
+     * 3. APB contains the alternate path instructions
+     * 4. Path is not throttled (hasn't exceeded instruction limit)
+     * If all conditions met, fetches instructions from APB and tags them
+     * as speculative path.
+     *
+     * @param tid Thread ID
+     * @param branch_seq_num Sequence number of branch that spawned this path
+     * @return Number of alternate path instructions fetched
+     */
+    unsigned fetchAlternatePathFromAPB(ThreadID tid, InstSeqNum branch_seq_num);
+
   private:
     /** Pointer to the O3CPU. */
     CPU *cpu;

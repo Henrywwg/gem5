@@ -47,6 +47,7 @@
 #include <list>
 #include <queue>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 #include "arch/generic/pcstate.hh"
@@ -548,6 +549,100 @@ class CPU : public BaseCPU
     /** Mapping for system thread id to cpu id */
     std::map<ThreadID, unsigned> threadMap;
 
+    /** Dual-path execution: Information about an active speculative path.
+     * Each entry represents one branch that has spawned an alternate path.
+     */
+    struct SpeculativePath
+    {
+        /** The branch instruction that created this speculative path */
+        DynInstPtr branchInst;
+
+        /** PC of the alternate path (not-taken if branch predicted taken, etc.) */
+        Addr alternatePath;
+
+        /** Has this path been resolved (branch executed)? */
+        bool resolved = false;
+
+        /** Was this the correct path? Only valid if resolved == true */
+        bool wasCorrect = false;
+
+        /** Thread ID this path belongs to */
+        ThreadID tid;
+
+        /** Number of instructions fetched on alternate path.
+         * Used to prevent runaway speculation when branch is stalled
+         * (e.g., due to cache miss on branch input operand).
+         */
+        unsigned instructionsFetched = 0;
+
+        /** Maximum instructions alternate path can fetch ahead of resolution.
+         * This prevents the alternate path from consuming excessive ROB/LSQ
+         * resources if the branch takes a long time to resolve.
+         * Configurable via maxSpecPathInstructions parameter.
+         */
+        unsigned maxInstructionsAhead;
+
+        SpeculativePath(DynInstPtr branch, Addr alt_pc, ThreadID thread_id,
+                       unsigned max_insts = 32)
+            : branchInst(branch), alternatePath(alt_pc), tid(thread_id),
+              maxInstructionsAhead(max_insts)
+        {}
+
+        /** Check if alternate path fetching should be throttled.
+         * Returns true when the path has fetched enough instructions
+         * and the branch hasn't resolved yet.
+         */
+        bool shouldThrottleFetch() const {
+            return !resolved && instructionsFetched >= maxInstructionsAhead;
+        }
+    };
+
+    /** Map of branch sequence numbers to their spawned speculative paths.
+     * This tracks all currently active dual-path executions. When a branch
+     * resolves, we use this to determine which instructions to squash.
+     */
+    std::unordered_map<InstSeqNum, SpeculativePath> activeSpeculativePaths;
+
+    /** Maximum instructions a speculative path can fetch ahead.
+     * Passed to SpeculativePath constructor to set the throttle limit.
+     */
+    unsigned maxSpecPathInstructions;
+
+    /** Dual-path execution: Spawn a new speculative path for a branch.
+     * Called by fetch stage when DualPathSwitcher indicates we should
+     * execute both paths of a low-confidence branch.
+     *
+     * @param branch_inst The branch instruction spawning the path
+     * @param alt_pc The alternate path PC to execute
+     * @param tid Thread ID
+     * @return True if path was spawned successfully
+     */
+    bool spawnSpeculativePath(DynInstPtr branch_inst, Addr alt_pc, ThreadID tid);
+
+    /** Dual-path execution: Resolve a speculative path when branch executes.
+     * Determines which path was correct and marks the other for squashing.
+     *
+     * @param branch_seq_num Sequence number of the resolving branch
+     * @param taken_path_correct True if taken path was correct
+     * @return True if a speculative path was found and resolved
+     */
+    bool resolveSpeculativePath(InstSeqNum branch_seq_num, bool taken_path_correct);
+
+    /** Dual-path execution: Check if an instruction belongs to a squashed path.
+     * Used by commit stage to filter out instructions from incorrect paths.
+     *
+     * @param inst The instruction to check
+     * @return True if instruction should be squashed (from wrong path)
+     */
+    bool isFromSquashedPath(DynInstPtr inst);
+
+    /** Dual-path execution: Clean up a resolved speculative path.
+     * Removes the path from tracking and frees associated resources.
+     *
+     * @param branch_seq_num The branch sequence number
+     */
+    void cleanupSpeculativePath(InstSeqNum branch_seq_num);
+
     /** Available thread ids in the cpu*/
     std::vector<ThreadID> tids;
 
@@ -588,6 +683,24 @@ class CPU : public BaseCPU
         /** Stat for total number of cycles the CPU spends descheduled due to a
          * quiesce operation or waiting for an interrupt. */
         statistics::Scalar quiesceCycles;
+
+        // Dual-path execution statistics
+        /** Number of times an alternate path was spawned */
+        statistics::Scalar dualPathSpawned;
+        /** Number of times primary path was correct */
+        statistics::Scalar dualPathPrimaryCorrect;
+        /** Number of times alternate path was correct */
+        statistics::Scalar dualPathAlternateCorrect;
+        /** Number of times alternate path fetch was throttled */
+        statistics::Scalar dualPathThrottled;
+        /** Total instructions fetched on primary path */
+        statistics::Scalar dualPathPrimaryInsts;
+        /** Total instructions fetched on alternate path */
+        statistics::Scalar dualPathAlternateInsts;
+        /** Total instructions committed from primary path */
+        statistics::Scalar dualPathPrimaryCommitted;
+        /** Total instructions squashed from alternate path */
+        statistics::Scalar dualPathAlternateSquashed;
     } cpuStats;
 
   public:
