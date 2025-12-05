@@ -554,8 +554,8 @@ class CPU : public BaseCPU
      */
     struct SpeculativePath
     {
-        /** The branch instruction that created this speculative path */
-        DynInstPtr branchInst;
+        /** Sequence number of the branch instruction that created this path */
+        InstSeqNum branchSeqNum;
 
         /** PC of the alternate path (not-taken if branch predicted taken, etc.) */
         Addr alternatePath;
@@ -582,9 +582,9 @@ class CPU : public BaseCPU
          */
         unsigned maxInstructionsAhead;
 
-        SpeculativePath(DynInstPtr branch, Addr alt_pc, ThreadID thread_id,
+        SpeculativePath(InstSeqNum seq_num, Addr alt_pc, ThreadID thread_id,
                        unsigned max_insts = 32)
-            : branchInst(branch), alternatePath(alt_pc), tid(thread_id),
+            : branchSeqNum(seq_num), alternatePath(alt_pc), tid(thread_id),
               maxInstructionsAhead(max_insts)
         {}
 

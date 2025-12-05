@@ -1538,7 +1538,7 @@ CPU::spawnSpeculativePath(DynInstPtr branch_inst, Addr alt_pc, ThreadID tid)
     activeSpeculativePaths.emplace(
         std::piecewise_construct,
         std::forward_as_tuple(branch_seq),
-        std::forward_as_tuple(branch_inst, alt_pc, tid, maxSpecPathInstructions)
+        std::forward_as_tuple(branch_seq, alt_pc, tid, maxSpecPathInstructions)
     );
     
     DPRINTF(O3CPU, "Spawned speculative path for branch [sn:%llu] "
