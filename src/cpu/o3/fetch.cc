@@ -1638,8 +1638,6 @@ Fetch::fetchAlternatePathFromAPB(ThreadID tid, InstSeqNum branch_seq_num)
     // This is similar to the main fetch loop, but simpler (no branches/macroop handling)
     
     unsigned num_alt_insts = 0;
-    Addr line_pc = fetchBufferAlignPC(alt_pc);  // Aligned start of cache line
-    unsigned line_size = apb->getLineSize();
     
     // Create a temporary PC state for the alternate path
     std::unique_ptr<PCStateBase> alt_pc_state(pc[tid]->clone());
@@ -2044,14 +2042,19 @@ Fetch::fetch(bool &status_change)
                     // Determine the alternate path PC
                     // If branch was predicted taken, alternate is not-taken (fall-through)
                     // If branch was predicted not-taken, alternate is taken (target)
-                    Addr predicted_pc = next_pc->instAddr();
-                    Addr fallthrough_pc = this_pc.instAddr();
-                    this_pc.staticInst->advancePC(fallthrough_pc);
+                    Addr alternate_pc;
+                    std::unique_ptr<PCStateBase> fallthrough_pc(this_pc.clone());
+                    instruction->staticInst->advancePC(*fallthrough_pc);
                     
-                    // Assume lookupAndUpdateNextPC sets next_pc to predicted target
-                    // So alternate is the opposite path
-                    Addr alternate_pc = (predicted_pc == fallthrough_pc) ? 
-                                       instruction->readPredTarg().instAddr() : fallthrough_pc;
+                    // Check if prediction was taken or not-taken
+                    // If predicted target matches fall-through, then predicted not-taken
+                    if (instruction->readPredTaken()) {
+                        // Predicted taken, alternate is fall-through
+                        alternate_pc = fallthrough_pc->instAddr();
+                    } else {
+                        // Predicted not-taken, alternate is target
+                        alternate_pc = instruction->readPredTarg().instAddr();
+                    }
                     
                     // Spawn the speculative path (creates entry in CPU's tracking map)
                     // This only creates the metadata; actual fetch happens below
