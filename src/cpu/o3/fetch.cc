@@ -2063,7 +2063,7 @@ Fetch::fetch(bool &status_change)
                     if (spawned) {
                         DPRINTF(Fetch, "[tid:%i] Spawned dual-path for branch [sn:%llu] "
                                "pred=%#x alt=%#x conf=%.2f\n",
-                               tid, instruction->seqNum, predicted_pc, alternate_pc, confidence);
+                               tid, instruction->seqNum, instruction->readPredTarg().instAddr(), alternate_pc, confidence);
                         
                         // Now fetch alternate path instructions from APB (if available)
                         // This happens immediately in the same cycle
