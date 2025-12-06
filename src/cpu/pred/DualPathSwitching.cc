@@ -66,7 +66,8 @@ namespace branch_prediction
 DPSTAGE::DPSTAGE(const DPSTAGEParams &params)
   : TAGE(params),
   loopPredictor(nullptr),
-  accuracyWindow(100),
+  accuracyWindow(),
+  accuracyWindowSize(100),
   correctCount(0),
   dualPathMode(true),
   threshold(0.7)
@@ -122,8 +123,9 @@ DPSTAGE::update(ThreadID tid, Addr pc, bool taken, void * &bp_history,
 
     // Alright heres the juicy part :3
     // dequeue an item and if it was a correct pred, decrement appropriately
-    if (accuracyWindow.full()) {
+    if (accuracyWindow.size() >= accuracyWindowSize) {
         if (accuracyWindow.front()) correctCount--;
+        accuracyWindow.pop_front();
     }
 
     //Add in the new value

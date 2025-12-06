@@ -65,9 +65,6 @@
 #include <deque>
 #include <vector>
 
-// Boost
-#include <boost/circular_buffer.hpp>
-
 // gem5 headers
 #include "base/types.hh"
 #include "cpu/pred/loop_predictor.hh"
@@ -103,7 +100,8 @@ class DPSTAGE : public TAGE
   protected:
 
     //DPS tags
-    boost::circular_buffer<bool> accuracyWindow;
+    std::deque<bool> accuracyWindow;
+    unsigned accuracyWindowSize;
     unsigned correctCount;
     bool dualPathMode;  //Are we using SDPE rn
     double threshold;   //Threshold to switch from TAGE-BP to SDPE
