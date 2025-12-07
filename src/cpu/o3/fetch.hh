@@ -60,6 +60,8 @@
 #include "mem/packet.hh"
 #include "mem/port.hh"
 #include "sim/eventq.hh"
+
+#include <queue>
 #include "sim/probe/probe.hh"
 
 namespace gem5

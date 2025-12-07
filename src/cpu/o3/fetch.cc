@@ -710,7 +710,7 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
 
                 // Queue for later - don't fetch immediately to avoid port conflict
                 altFetchQueue.push({alt_vaddr, tid, inst->pcState().instAddr()});
-                stats.dualPathTriggers++;
+                fetchStats.dualPathTriggers++;
                 
                 DPRINTF(Fetch, "[tid:%i] Queued alternate fetch, queue size now %d\n",
                         tid, altFetchQueue.size());
