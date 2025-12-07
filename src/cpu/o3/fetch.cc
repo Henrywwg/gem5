@@ -678,6 +678,10 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
         ++fetchStats.predictedBranches;
     }
 
+    // DUAL-PATH EXECUTION DISABLED
+    // The fetchAlternatePath() mechanism causes crossbar conflicts
+    // Need to redesign to use separate memory ports or prefetch infrastructure
+    /*
     // Dual-path execution: fetch alternate path into APB with proper virtual address translation
     if (apb && cpu->dualPathSwitcher) {
         // Use actual branch predictor confidence
@@ -714,6 +718,7 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
             }
         }
     }
+    */
 
     return predict_taken;
 }
