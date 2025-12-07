@@ -2030,15 +2030,21 @@ Fetch::fetch(bool &status_change)
             // ALSO: Only allow ONE alternate path at a time. If there's already an
             // active alternate path, don't spawn another until it resolves.
             if (instruction->isCondCtrl() && 
-                instruction->getPathID() == 0 &&  // Only from primary path!
-                cpu->activeSpeculativePaths.empty() &&  // No other alternate paths active!
-                cpu->dualPathSwitcher && apb) {
+                instruction->getPathID() == 0) {  // Only from primary path!
+                
+                // TODO: Re-enable these checks when DualPathSwitcher/APB are properly initialized
+                // For now, always enable dual-path execution for testing
+                // cpu->activeSpeculativePaths.empty() &&  // No other alternate paths active!
+                // cpu->dualPathSwitcher && apb) {
                 
                 // Get branch prediction confidence from the instruction
                 double confidence = instruction->getBranchPredConfidence();
                 
                 // Check if we should fetch alternate path for this branch
-                if (cpu->dualPathSwitcher->shouldFetchAlternatePath(confidence)) {
+                // For now, use a simple threshold (confidence < 0.8 = low confidence)
+                bool should_fetch_alternate = (confidence < 0.8);
+                
+                if (should_fetch_alternate) {
                     // Determine the alternate path PC
                     // If branch was predicted taken, alternate is not-taken (fall-through)
                     // If branch was predicted not-taken, alternate is taken (target)

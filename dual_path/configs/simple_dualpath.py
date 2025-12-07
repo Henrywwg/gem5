@@ -37,6 +37,10 @@ system.cpu = X86O3CPU()
 # (DPS-TAGE if you want dynamic switching)
 system.cpu.branchPred = LTAGE()
 
+# **CRITICAL: Enable dual-path execution by creating APB and DualPathSwitcher**
+system.cpu.apb = APB()
+system.cpu.dualPathSwitcher = DualPathSwitcher()
+
 # Create memory bus
 system.membus = SystemXBar()
 

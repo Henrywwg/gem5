@@ -79,6 +79,10 @@ elif args.predictor == "DPSTAGE":
 else:
     system.cpu.branchPred = LTAGE()
 
+# Enable dual-path execution
+system.cpu.apb = APB()
+system.cpu.dualPathSwitcher = DualPathSwitcher()
+
 # Create cache hierarchy
 system.cpu.icache = L1ICache()
 system.cpu.dcache = L1DCache()

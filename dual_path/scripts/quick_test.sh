@@ -3,7 +3,7 @@
 
 set -e
 
-GEM5_ROOT="../../.."
+GEM5_ROOT="../.."
 GEM5_BIN="${GEM5_ROOT}/build/X86/gem5.opt"
 RESULTS_DIR="../results"
 
