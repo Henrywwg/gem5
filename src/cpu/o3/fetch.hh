@@ -459,6 +459,15 @@ class Fetch
     // Track alternate path requests awaiting translation (vaddr -> branch PC)
     std::unordered_map<Addr, std::pair<Addr, ThreadID>> altPathTranslations;
 
+    // Queue for delayed alternate fetches (to avoid port conflicts)
+    // Process these in tick() when icachePort is idle
+    struct PendingAlternateFetch {
+        Addr vaddr;
+        ThreadID tid;
+        Addr branch_pc;
+    };
+    std::queue<PendingAlternateFetch> altFetchQueue;
+
     /**
      * Track alternate path addresses that have been fetched before.
      * Used for bypass-then-promote policy:

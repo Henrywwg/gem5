@@ -678,8 +678,9 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
         ++fetchStats.predictedBranches;
     }
 
-    // Dual-path execution: fetch alternate path into APB with proper virtual address translation
-    // Uses prefetch-style requests that don't block the main fetch pipeline
+    // Dual-path execution: Queue alternate fetches for later processing
+    // SERIALIZATION: Don't fetch immediately - queue for next cycle when port is idle
+    // This prevents crossbar conflicts from concurrent normal + alternate fetches
     if (apb && cpu->dualPathSwitcher && !cacheBlocked) {
         // Use actual branch predictor confidence
         double confidence = inst->getBranchPredConfidence();
@@ -696,19 +697,23 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
                     inst->staticInst->advancePC(*alternate_pc);
                     alt_vaddr = alternate_pc->instAddr();
                     DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dual-path mode: "
-                            "fetching NOT-TAKEN path %#x into APB (confidence=%.2f)\n",
+                            "QUEUING NOT-TAKEN path %#x into APB (confidence=%.2f)\n",
                             tid, inst->seqNum, alt_vaddr, confidence);
                 } else {
                     // Predicted not-taken, so alternate is branch target (taken)
                     inst->staticInst->branchTarget(*alternate_pc);
                     alt_vaddr = alternate_pc->instAddr();
                     DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dual-path mode: "
-                            "fetching TAKEN path %#x into APB (confidence=%.2f)\n",
+                            "QUEUING TAKEN path %#x into APB (confidence=%.2f)\n",
                             tid, inst->seqNum, alt_vaddr, confidence);
                 }
 
-                // Queue alternate path fetch (non-blocking prefetch style)
-                fetchAlternatePath(alt_vaddr, tid, inst->pcState().instAddr());
+                // Queue for later - don't fetch immediately to avoid port conflict
+                altFetchQueue.push({alt_vaddr, tid, inst->pcState().instAddr()});
+                stats.dualPathTriggers++;
+                
+                DPRINTF(Fetch, "[tid:%i] Queued alternate fetch, queue size now %d\n",
+                        tid, altFetchQueue.size());
             } catch (...) {
                 // Ignore errors in alternate path calculation
                 // This can happen for unconditional branches or other corner cases
@@ -1099,22 +1104,6 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
 
         fetchStats.cacheLines++;
 
-        // CRITICAL: Check if any alternate path fetches are using the icachePort
-        // The port can only handle one request at a time
-        // If alternate fetches are in flight, we must wait for them to complete
-        if (!outstandingAltFetches.empty()) {
-            DPRINTF(Fetch, "[tid:%i] Alternate path fetch in progress, "
-                    "blocking normal fetch (outstanding: %d)\n",
-                    tid, outstandingAltFetches.size());
-            
-            // Block until alternate fetches complete
-            fetchStatus[tid] = IcacheWaitRetry;
-            retryPkt = data_pkt;
-            retryTid = tid;
-            cacheBlocked = true;
-            return;
-        }
-
         // Access the cache.
         if (!icachePort.sendTimingReq(data_pkt)) {
             assert(retryPkt == NULL);
@@ -1369,6 +1358,34 @@ Fetch::tick()
     }
 
     DPRINTF(Fetch, "Running stage.\n");
+
+    // Process queued alternate path fetches when port is idle
+    // This serializes alternate fetches to avoid crossbar port conflicts
+    if (!altFetchQueue.empty()) {
+        // Only process if ALL threads' fetch stages are idle (no pending I-cache requests)
+        bool port_is_idle = true;
+        for (ThreadID tid = 0; tid < numThreads; ++tid) {
+            if (fetchStatus[tid] == IcacheWaitResponse || 
+                fetchStatus[tid] == ItlbWait ||
+                fetchStatus[tid] == TrapPending) {
+                port_is_idle = false;
+                break;
+            }
+        }
+
+        if (port_is_idle && !cacheBlocked) {
+            // Process one queued alternate fetch per cycle
+            PendingAlternateFetch pending = altFetchQueue.front();
+            altFetchQueue.pop();
+            
+            DPRINTF(Fetch, "[tid:%i] Processing queued alternate fetch to %#x "
+                    "(queue remaining: %d)\n",
+                    pending.tid, pending.vaddr, altFetchQueue.size());
+            
+            // Now safe to send - port is completely idle
+            fetchAlternatePath(pending.vaddr, pending.tid, pending.branch_pc);
+        }
+    }
 
     if (FullSystem) {
         if (fromCommit->commitInfo[0].interruptPending) {
