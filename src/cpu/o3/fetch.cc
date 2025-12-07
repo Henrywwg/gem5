@@ -678,12 +678,9 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
         ++fetchStats.predictedBranches;
     }
 
-    // DUAL-PATH EXECUTION DISABLED
-    // The fetchAlternatePath() mechanism causes crossbar conflicts
-    // Need to redesign to use separate memory ports or prefetch infrastructure
-    /*
     // Dual-path execution: fetch alternate path into APB with proper virtual address translation
-    if (apb && cpu->dualPathSwitcher) {
+    // Uses prefetch-style requests that don't block the main fetch pipeline
+    if (apb && cpu->dualPathSwitcher && !cacheBlocked) {
         // Use actual branch predictor confidence
         double confidence = inst->getBranchPredConfidence();
 
@@ -710,7 +707,7 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
                             tid, inst->seqNum, alt_vaddr, confidence);
                 }
 
-                // Fetch alternate path with proper virtual address translation
+                // Queue alternate path fetch (non-blocking prefetch style)
                 fetchAlternatePath(alt_vaddr, tid, inst->pcState().instAddr());
             } catch (...) {
                 // Ignore errors in alternate path calculation
@@ -718,7 +715,6 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
             }
         }
     }
-    */
 
     return predict_taken;
 }
@@ -963,23 +959,37 @@ Fetch::finishTranslationAlt(const Fault &fault, const RequestPtr &mem_req,
             return;
         }
 
-        // Build packet for alternate path fetch
+        // Create packet for alternate path fetch
         PacketPtr data_pkt = new Packet(mem_req, MemCmd::ReadReq);
         data_pkt->dataDynamic(new uint8_t[fetchBufferSize]);
 
         DPRINTF(Fetch, "[tid:%i] Alternate path translation complete, "
                 "fetching from I-cache (paddr: %#x)\n", tid, mem_req->getPaddr());
 
-        // Try to send the request. If it fails, clean up
+        // Try to send the request. If port is busy, defer it
         if (!icachePort.sendTimingReq(data_pkt)) {
-            DPRINTF(Fetch, "[tid:%i] Alternate path I-cache access failed, "
-                    "port busy\n", tid);
+            DPRINTF(Fetch, "[tid:%i] Alternate path I-cache port busy, "
+                    "deferring fetch for %#x\n", tid, altPC);
+            
+            // Clean up packet
             delete[] data_pkt->getPtr<uint8_t>();
             delete data_pkt;
+            
+            // Add to deferred queue if there's space
+            if (deferredAltFetches.size() < MAX_DEFERRED_ALT_FETCHES) {
+                auto trans_it = altPathTranslations.find(altPC);
+                if (trans_it != altPathTranslations.end()) {
+                    deferredAltFetches.push_back({altPC, tid, trans_it->second.first});
+                    ++fetchStats.altPathFetchDeferred;
+                }
+            } else {
+                ++fetchStats.altPathFetchDeferredDropped;
+            }
+            
             outstandingAltFetches.erase(it);
             altPathTranslations.erase(altPC);
         }
-        // Note: packet will be handled in handleIcacheTimingResp
+        // Note: packet will be handled in processCacheCompletion via handleIcacheTimingResp
     } else {
         // Translation fault - just drop this alternate path fetch
         DPRINTF(Fetch, "[tid:%i] Alternate path translation fault (%s) for %#x, dropping\n",
