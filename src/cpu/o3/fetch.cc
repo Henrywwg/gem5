@@ -2033,12 +2033,16 @@ Fetch::fetch(bool &status_change)
 
             // DUAL-PATH EXECUTION: Check if this is a conditional branch
             // and we should fetch the alternate path.
-            // IMPORTANT: Only spawn alternate paths from the PRIMARY path (pathID=0).
-            // If a branch appears in an alternate path (pathID=1), it just uses
-            // normal branch prediction. This prevents nested/multiple alternate paths
-            // and keeps resource usage bounded.
-            // ALSO: Only allow ONE alternate path at a time. If there's already an
-            // active alternate path, don't spawn another until it resolves.
+            // DISABLED FOR NOW: The dual-path spawning logic conflicts with
+            // gem5's memory subsystem (crossbar assertions). This needs careful
+            // redesign to properly handle speculative memory requests.
+            //
+            // TODO: Implement proper dual-path fetching that:
+            // 1. Doesn't conflict with existing icache requests
+            // 2. Properly handles memory ordering in the crossbar
+            // 3. Uses separate fetch queues for alternate paths
+            // 4. Coordinates with the memory system for speculative fetches
+            /*
             if (instruction->isCondCtrl() && 
                 instruction->getPathID() == 0) {  // Only from primary path!
                 
@@ -2095,6 +2099,7 @@ Fetch::fetch(bool &status_change)
                     }
                 }
             }
+            */
 
             set(next_pc, this_pc);
 
