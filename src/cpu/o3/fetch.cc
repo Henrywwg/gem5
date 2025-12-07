@@ -2081,15 +2081,17 @@ Fetch::fetch(bool &status_change)
                                "pred=%#x alt=%#x conf=%.2f\n",
                                tid, instruction->seqNum, instruction->readPredTarg().instAddr(), alternate_pc, confidence);
                         
-                        // Now fetch alternate path instructions from APB (if available)
-                        // This happens immediately in the same cycle
-                        unsigned alt_insts = fetchAlternatePathFromAPB(tid, instruction->seqNum);
+                        // TODO: Fetch alternate path instructions from APB
+                        // For now, just track that we spawned a speculative path
+                        // Actually fetching from APB requires proper non-blocking fetch infrastructure
+                        // which needs to be implemented carefully to avoid crossbar conflicts
                         
-                        if (alt_insts > 0) {
-                            DPRINTF(Fetch, "[tid:%i] Fetched %d alternate path instructions\n",
-                                   tid, alt_insts);
-                            numInst += alt_insts;  // Count toward this cycle's fetch
-                        }
+                        // unsigned alt_insts = fetchAlternatePathFromAPB(tid, instruction->seqNum);
+                        // if (alt_insts > 0) {
+                        //     DPRINTF(Fetch, "[tid:%i] Fetched %d alternate path instructions\n",
+                        //            tid, alt_insts);
+                        //     numInst += alt_insts;
+                        // }
                     }
                 }
             }
