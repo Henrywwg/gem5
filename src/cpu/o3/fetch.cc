@@ -1099,6 +1099,22 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
 
         fetchStats.cacheLines++;
 
+        // CRITICAL: Check if any alternate path fetches are using the icachePort
+        // The port can only handle one request at a time
+        // If alternate fetches are in flight, we must wait for them to complete
+        if (!outstandingAltFetches.empty()) {
+            DPRINTF(Fetch, "[tid:%i] Alternate path fetch in progress, "
+                    "blocking normal fetch (outstanding: %d)\n",
+                    tid, outstandingAltFetches.size());
+            
+            // Block until alternate fetches complete
+            fetchStatus[tid] = IcacheWaitRetry;
+            retryPkt = data_pkt;
+            retryTid = tid;
+            cacheBlocked = true;
+            return;
+        }
+
         // Access the cache.
         if (!icachePort.sendTimingReq(data_pkt)) {
             assert(retryPkt == NULL);
