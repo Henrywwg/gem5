@@ -29,13 +29,10 @@ This will:
 ```bash
 cd /path/to/gem5
 
-# Run with standard O3CPU config (dual-path is built-in)
+# Run with dual-path O3CPU config
 ./build/X86/gem5.opt \
-    configs/example/se.py \
-    --cpu-type=O3CPU \
-    --caches \
-    --l2cache \
-    --cmd=dual_path/benchmarks/bin/daxpy_progressive
+    dual_path/configs/simple_dualpath.py \
+    --binary=dual_path/benchmarks/bin/daxpy_progressive
 ```
 
 ### Step 2: Check for Dual-Path Activity
@@ -134,9 +131,8 @@ grep "cpu_type" m5out/config.ini
 ```bash
 # Check for uninitialized variables
 ./build/X86/gem5.opt --debug-flags=Fetch,APB,Branch \
-    configs/example/se.py \
-    --cpu-type=O3CPU \
-    --cmd=dual_path/benchmarks/bin/daxpy_progressive \
+    dual_path/configs/simple_dualpath.py \
+    --binary=dual_path/benchmarks/bin/daxpy_progressive \
     2>&1 | less
 ```
 
@@ -180,6 +176,26 @@ Run:
 ```bash
 ./build/X86/gem5.opt my_test.py
 ```
+
+---
+
+## Configuration Scripts
+
+Three test configs are provided in `dual_path/configs/`:
+
+1. **simple_dualpath.py** - Minimal O3CPU config, no caches
+   - Fastest startup, good for quick tests
+   - Usage: `--binary=<path> [--cpu-clock=2GHz] [--mem-size=512MB]`
+
+2. **o3_with_caches.py** - O3CPU with L1/L2 cache hierarchy
+   - More realistic performance testing
+   - Usage: `--binary=<path> [--predictor=LTAGE] [--l1i-size=32kB] [--l2-size=256kB]`
+   - Supports `--predictor`: TAGE, LTAGE, or DPSTAGE
+
+3. **eval_dualpath.py** - Full evaluation config (legacy, needs SimObject fixes)
+   - Originally designed for comprehensive testing
+   - Currently references non-existent DualPathSwitcher SimObject
+   - Use configs 1 or 2 instead
 
 ---
 

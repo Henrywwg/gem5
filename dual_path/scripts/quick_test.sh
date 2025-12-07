@@ -28,12 +28,9 @@ echo ""
 echo "Test 1: Running daxpy_progressive..."
 mkdir -p ${RESULTS_DIR}/quick_test_daxpy
 $GEM5_BIN \
-    ${GEM5_ROOT}/configs/example/se.py \
-    --cpu-type=O3CPU \
-    --caches \
-    --cmd=../benchmarks/bin/daxpy_progressive \
-    --output=${RESULTS_DIR}/quick_test_daxpy \
-    --stats-file=${RESULTS_DIR}/quick_test_daxpy/stats.txt
+    ../configs/simple_dualpath.py \
+    --binary=../benchmarks/bin/daxpy_progressive \
+    --outdir=${RESULTS_DIR}/quick_test_daxpy
 
 echo ""
 echo "Extracting DAXPY metrics..."
@@ -45,12 +42,9 @@ echo "========================================"
 echo "Test 2: Running matmul_conditional..."
 mkdir -p ${RESULTS_DIR}/quick_test_matmul
 $GEM5_BIN \
-    ${GEM5_ROOT}/configs/example/se.py \
-    --cpu-type=O3CPU \
-    --caches \
-    --cmd=../benchmarks/bin/matmul_conditional \
-    --output=${RESULTS_DIR}/quick_test_matmul \
-    --stats-file=${RESULTS_DIR}/quick_test_matmul/stats.txt
+    ../configs/simple_dualpath.py \
+    --binary=../benchmarks/bin/matmul_conditional \
+    --outdir=${RESULTS_DIR}/quick_test_matmul
 
 echo ""
 echo "Extracting MatMul metrics..."
