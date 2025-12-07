@@ -959,6 +959,29 @@ Fetch::finishTranslationAlt(const Fault &fault, const RequestPtr &mem_req,
             return;
         }
 
+        // CRITICAL: Check if normal fetch already has an outstanding icache request
+        // The same icachePort cannot have multiple simultaneous requests
+        // If normal fetch is waiting for icache response, defer the alternate fetch
+        if (fetchStatus[tid] == IcacheWaitResponse) {
+            DPRINTF(Fetch, "[tid:%i] Normal fetch has outstanding icache request, "
+                    "deferring alternate path fetch for %#x\n", tid, altPC);
+            
+            // Add to deferred queue to retry later
+            if (deferredAltFetches.size() < MAX_DEFERRED_ALT_FETCHES) {
+                auto trans_it = altPathTranslations.find(altPC);
+                if (trans_it != altPathTranslations.end()) {
+                    deferredAltFetches.push_back({altPC, tid, trans_it->second.first});
+                    ++fetchStats.altPathFetchDeferred;
+                }
+            } else {
+                ++fetchStats.altPathFetchDeferredDropped;
+            }
+            
+            outstandingAltFetches.erase(it);
+            altPathTranslations.erase(altPC);
+            return;
+        }
+
         // Create packet for alternate path fetch
         PacketPtr data_pkt = new Packet(mem_req, MemCmd::ReadReq);
         data_pkt->dataDynamic(new uint8_t[fetchBufferSize]);
