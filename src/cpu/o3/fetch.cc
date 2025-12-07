@@ -1645,8 +1645,18 @@ Fetch::fetchAlternatePathFromAPB(ThreadID tid, InstSeqNum branch_seq_num)
     
     // We'll fetch up to fetchWidth instructions OR until we hit a branch
     // (to avoid complexity of handling branches in alternate path)
-    unsigned fetch_limit = std::min(fetchWidth, 
-                                    fetchQueueSize - (unsigned)fetchQueue[tid].size());
+    // CRITICAL: Must check against numInst to avoid exceeding fetchWidth in buildInst()
+    unsigned remaining_bandwidth = (numInst < fetchWidth) ? (fetchWidth - numInst) : 0;
+    unsigned fetch_limit = std::min({remaining_bandwidth,
+                                     fetchQueueSize - (unsigned)fetchQueue[tid].size(),
+                                     4u});  // Cap at 4 for now
+    
+    // If no bandwidth left, don't fetch alternate path this cycle
+    if (fetch_limit == 0) {
+        DPRINTF(Fetch, "[tid:%i] No fetch bandwidth for alternate path (numInst=%d)\n",
+                tid, numInst);
+        return 0;
+    }
     
     // Temporary decoder for alternate path
     // Note: In a real implementation, you might reuse decoder[tid] or have a separate one
@@ -1656,7 +1666,7 @@ Fetch::fetchAlternatePathFromAPB(ThreadID tid, InstSeqNum branch_seq_num)
     // In a full implementation, you'd decode the entire cache line properly
     // For now, we'll create up to 4 instructions as a proof of concept
     
-    for (unsigned i = 0; i < fetch_limit && i < 4; ++i) {
+    for (unsigned i = 0; i < fetch_limit; ++i) {
         // In a real implementation, you'd decode actual instructions from apb_line
         // For this implementation, we'll create NOP instructions as placeholders
         // This demonstrates the path tagging mechanism
